@@ -494,7 +494,8 @@ q<!DOCTYPE html>
         .modal {
             display: none;
             position: fixed;
-            z-index: 2000;
+            /* Ensure modals appear above other UI layers (toasts, sidebars, etc.) */
+            z-index: 100000;
             left: 0;
             top: 0;
             width: 100%;
@@ -514,6 +515,15 @@ q<!DOCTYPE html>
             text-align: center;
             animation: modalSlideIn 0.3s ease;
             position: relative;
+            z-index: 100001; /* ensure content is above overlay and other elements */
+        }
+
+        /* Ensure student details modal appears above other modals (section modal) */
+        #studentDetailsModal {
+            z-index: 210000 !important;
+        }
+        #studentDetailsModal .modal-content {
+            z-index: 210001 !important;
         }
         
         .modal-content.form {
@@ -1591,7 +1601,13 @@ q<!DOCTYPE html>
         <div class="modal-content" style="max-width: 900px; max-height: 85vh; overflow-y: auto; margin: 5vh auto;">
             <button type="button" class="modal-close" aria-label="Close" onclick="closeModal('sectionStudentsModal')">&times;</button>
             <h3 class="modal-title" id="sectionStudentsModalTitle">Section Students</h3>
-            
+            <!-- Section meta info -->
+            <div style="margin: 8px 0 14px; color: var(--gray-700); display:flex; gap:12px; flex-wrap:wrap;">
+                <div><strong>Adviser:</strong> <span id="sectionAdviser">-</span></div>
+                <div><strong>Status:</strong> <span id="sectionStatus">-</span></div>
+                <div><strong>Current Count:</strong> <span id="sectionCurrentCount">-</span></div>
+            </div>
+
             <!-- Statistics Bar -->
             <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
                 <div style="display: flex; justify-content: space-around; text-align: center;">
@@ -2412,11 +2428,17 @@ q<!DOCTYPE html>
             fetch(`/api/student/${studentId}`)
                 .then(r => r.json())
                 .then(data => {
-                    if (!data.success) {
-                        alert('Error: ' + (data.message || 'Failed to fetch details'));
+                    // Handle API that either returns { success: true, student: {...} }
+                    // or returns the student object directly.
+                    let s = null;
+                    if (data && data.success && data.student) {
+                        s = data.student;
+                    } else if (data && (data.id || data.enrollment_id || data.full_name)) {
+                        s = data; // raw student object
+                    } else {
+                        alert('Error: ' + (data && data.message ? data.message : 'Failed to fetch details'));
                         return;
                     }
-                    const s = data.student;
                     // Basic and personal
                     document.getElementById('sdFullName').value = s.full_name || '';
                     document.getElementById('sdSY').value = s.school_year || '';
@@ -2863,6 +2885,17 @@ q<!DOCTYPE html>
                         document.getElementById('maleStudentsCount').textContent = data.statistics.male;
                         document.getElementById('femaleStudentsCount').textContent = data.statistics.female;
 
+                        // Populate section meta info
+                        try {
+                            const sec = data.section || {};
+                            // Adviser
+                            document.getElementById('sectionAdviser').textContent = sec.adviser_name || '-';
+                            // Status
+                            document.getElementById('sectionStatus').textContent = (sec.is_active === false) ? 'Inactive' : 'Active';
+                            // Current count: prefer the live students count from the response
+                            document.getElementById('sectionCurrentCount').textContent = (data.statistics && typeof data.statistics.total === 'number') ? data.statistics.total : (sec.current_count != null ? sec.current_count : '-');
+                        } catch (e) { console.error('Error populating section meta info:', e); }
+
                         // Populate students table
                         tbody.innerHTML = '';
                         
@@ -2885,10 +2918,13 @@ q<!DOCTYPE html>
                                     <td>${student.contact_number || '-'}</td>
                                     <td>${enrollmentDate}</td>
                                     <td class="table-actions">
-                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal(${student.id}, '${student.full_name}', ${sectionId}, '${gradeLevel} - ${sectionName}')">
+                                        <button type="button" class="action-btn action-view" title="View details" onclick="openStudentDetails(${student.id})">
+                                            <i class="fas fa-eye"></i> View
+                                        </button>
+                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId}, '${(gradeLevel + ' - ' + sectionName).replace(/'/g, "\\'")}')">
                                             <i class="fas fa-exchange-alt"></i> Reassign
                                         </button>
-                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection(${student.id}, '${student.full_name}', ${sectionId})">
+                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId})">
                                             <i class="fas fa-user-minus"></i> Remove
                                         </button>
                                     </td>
