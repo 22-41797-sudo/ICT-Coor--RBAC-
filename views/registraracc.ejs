@@ -156,7 +156,7 @@
                                 <td>
                                     <form method="POST" action="/delete-registrar-account" style="display:inline;">
                                         <input type="hidden" name="id" value="<%= account.id %>">
-                                        <button type="submit" class="btn-danger" onclick="return confirm('Are you sure you want to delete this account?');">Delete</button>
+                                        <button type="submit" class="btn-danger" onclick="return confirmDeleteForm(this.form, 'Are you sure you want to delete this account?');">Delete</button>
                                     </form>
                                 </td>
                             </tr>
@@ -169,6 +169,7 @@
         </div>
     </div>
 </div>
-    <script src="/js/toast.js"></script>
+        <script src="/js/genericConfirm.js"></script>
+        <script src="/js/toast.js"></script>
 </body>
 </html>

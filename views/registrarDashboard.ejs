@@ -1528,69 +1528,57 @@
             body: JSON.stringify(payload)
         })
         .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                alert('Details saved.');
-                fillDetailsModal.hide();
-                location.reload();
-            } else {
-                alert('Error: ' + (data.message || 'Failed to save changes'));
-            }
-        })
-        .catch(err => {
-            console.error(err);
-            alert('An error occurred while saving changes.');
-        });
-    });
-    function approveRequest(requestId) {
-        if (confirm('Are you sure you want to approve this registration request?')) {
-            fetch(`/approve-request/${requestId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert('Registration request approved successfully!');
-                    location.reload();
+                    window.showAlert('Details saved.').then(()=>{
+                        fillDetailsModal.hide();
+                        location.reload();
+                    });
                 } else {
-                    alert('Error: ' + (data.message || 'Failed to approve request'));
+                    window.showAlert('Error: ' + (data.message || 'Failed to save changes'));
                 }
             })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('An error occurred while approving the request');
+            .catch(err => {
+                console.error(err);
+                window.showAlert('An error occurred while saving changes.');
             });
+    });
+    async function approveRequest(requestId) {
+        try {
+            const ok = await window.showConfirm('Approve registration', 'Are you sure you want to approve this registration request?');
+            if (!ok) return;
+            const response = await fetch(`/approve-request/${requestId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const data = await response.json();
+            if (data.success) {
+                await window.showAlert('Registration request approved successfully!');
+                location.reload();
+            } else {
+                window.showAlert('Error: ' + (data.message || 'Failed to approve request'));
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            window.showAlert('An error occurred while approving the request');
         }
     }
 
-    function rejectRequest(requestId) {
-        const reason = prompt('Please provide a reason for rejection:');
-        if (reason && reason.trim() !== '') {
-            fetch(`/reject-request/${requestId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ reason: reason.trim() })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('Registration request rejected');
-                    location.reload();
-                } else {
-                    alert('Error: ' + (data.message || 'Failed to reject request'));
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('An error occurred while rejecting the request');
-            });
-        } else if (reason !== null) {
-            alert('Rejection reason is required');
+    async function rejectRequest(requestId) {
+        try {
+            const reason = await window.showPrompt('Reject registration', 'Please provide a reason for rejection:', 'Enter reason here');
+            if (reason === null) return; // user cancelled
+            if (!reason.trim()) {
+                return window.showAlert('Rejection reason is required');
+            }
+            const response = await fetch(`/reject-request/${requestId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason.trim() }) });
+            const data = await response.json();
+            if (data.success) {
+                await window.showAlert('Registration request rejected');
+                location.reload();
+            } else {
+                window.showAlert('Error: ' + (data.message || 'Failed to reject request'));
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            window.showAlert('An error occurred while rejecting the request');
         }
     }
     // Expose functions globally so inline `onclick` handlers in the table can call them
@@ -1604,6 +1592,7 @@
         // ignore if window not available (very unlikely in browser)
     }
 }catch(err){console.error('Registrar dashboard script error:', err);} })();</script>
+    <script src="/js/genericConfirm.js"></script>
     <script src="/js/toast.js"></script>
 </body>
 </html>

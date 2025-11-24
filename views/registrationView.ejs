@@ -13,7 +13,7 @@
     <a href="/registrar" class="btn btn-secondary mb-3">Back to Dashboard</a>
         <div class="mb-3">
                 <button class="btn btn-warning me-2" data-bs-toggle="modal" data-bs-target="#editModal">Edit</button>
-                <form action="/registration/<%= registration.id %>/delete" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this registration?');">
+                <form action="/registration/<%= registration.id %>/delete" method="POST" style="display:inline;" onsubmit="return confirmDeleteForm(this, 'Are you sure you want to delete this registration?');">
                         <button type="submit" class="btn btn-danger">Delete</button>
                 </form>
         </div>
@@ -348,6 +348,7 @@
                             }
                         });
     </script>
+    <script src="/js/genericConfirm.js"></script>
 </div>
 </body>
 </html>
