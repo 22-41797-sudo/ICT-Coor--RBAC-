@@ -354,9 +354,15 @@ hr {
 }
 
 /* Barangay 'Other' input styling (moved from inline styles) */
-#barangayOther {
+#barangayOtherContainer {
     display: none;
-    margin-top: 8px;
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 150px;
+}
+
+#barangayOtherContainer.show {
+    display: flex;
 }
 .signature-line-input {
     width: 100%;
