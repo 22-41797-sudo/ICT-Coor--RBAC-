@@ -7,6 +7,7 @@ const multer = require('multer');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const dssEngine = require('./dss-engine'); // Import DSS Engine
+const emailService = require('./email-service'); // Import email service for notifications
 
 const app = express();
 const port = 3000;
@@ -1081,11 +1082,14 @@ const upload = multer({
 
 // PostgreSQL connection pool
 const pool = new Pool({
-    user: 'postgres',
-    host: 'localhost',
-    database: 'ICTCOORdb',
-    password: 'bello0517',
-    port: 5432,
+    user: process.env.DB_USER || 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    database: process.env.DB_NAME || 'ICTCOORdb',
+    password: process.env.DB_PASSWORD,
+    port: process.env.DB_PORT || 5432,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
 });
 
 // Test database connection
@@ -2449,6 +2453,31 @@ app.post('/submit-enrollment', enrollmentLimiter, upload.single('signatureImage'
             gmail, lrn, gradeLevel, lastName, givenName 
         });
         
+        // Send submission confirmation email
+        try {
+            await emailService.sendEnrollmentStatusUpdate(
+                gmail,
+                givenName + ' ' + lastName,
+                token,
+                'pending'
+            );
+        } catch (emailErr) {
+            console.error('Error sending enrollment submission confirmation email:', emailErr);
+            // Don't fail the submission if email fails
+        }
+        
+        // Send submission confirmation email
+        try {
+            await emailService.sendEnrollmentStatusUpdate(
+                gmail,
+                givenName + ' ' + lastName,
+                token,
+                'pending'
+            );
+        } catch (emailErr) {
+            console.error('Error sending enrollment submission confirmation email:', emailErr);
+        }
+        
         // Return success with token
         res.json({ 
             success: true, 
@@ -2574,6 +2603,20 @@ app.post('/approve-request/:id', async (req, res) => {
         );
 
         await client.query('COMMIT');
+        
+        // Send approval email notification
+        try {
+            await emailService.sendEnrollmentStatusUpdate(
+                request.gmail_address,
+                request.first_name + ' ' + request.last_name,
+                request.request_token,
+                'approved'
+            );
+        } catch (emailErr) {
+            console.error('Error sending approval email:', emailErr);
+            // Don't fail the approval if email fails
+        }
+        
         res.json({ success: true, message: 'Request approved successfully', early_registration_id: inserted.rows[0].id });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -2660,7 +2703,22 @@ app.post('/api/document-request/submit', documentRequestLimiter, async (req, res
         await logSubmission('document_request', req, 'success', null, token, { 
             email, studentName, documentType 
         });
-        return res.json({ success: true, message: 'Document request submitted successfully!', token });
+                // Send submission confirmation email
+                try {
+                    await emailService.sendDocumentRequestStatusUpdate(
+                        email,
+                        studentName,
+                        token,
+                        documentType,
+                        'pending',
+                        null
+                    );
+                } catch (emailErr) {
+                    console.error('Error sending document submission confirmation email:', emailErr);
+                    // Don't fail the submission if email fails
+                }
+        
+                return res.json({ success: true, message: 'Document request submitted successfully!', token });
     } catch (err) {
         // Auto-create schema if missing
         if (err.message && /relation "document_requests" does not exist/i.test(err.message)) {
@@ -2823,6 +2881,23 @@ app.put('/api/guidance/document-requests/:id/status', async (req, res) => {
                 success: false,
                 message: 'Request not found'
             });
+        }
+        
+        const updatedRequest = result.rows[0];
+        
+        // Send status update email notification
+        try {
+            await emailService.sendDocumentRequestStatusUpdate(
+                updatedRequest.email,
+                updatedRequest.student_name,
+                updatedRequest.request_token,
+                updatedRequest.document_type,
+                updatedRequest.status,
+                updatedRequest.rejection_reason || null
+            );
+        } catch (emailErr) {
+            console.error('Error sending document status email:', emailErr);
+            // Don't fail the status update if email fails
         }
 
         res.json({
