@@ -267,7 +267,10 @@
                           <option value="Calamias">Calamias</option>
                           <option value="Others">Others</option>
                       </select>
-                      <input type="text" id="barangayOther" name="barangayOther" placeholder="Enter Barangay name" title="Enter Barangay name">
+                  </div>
+                  <div class="form-field" id="barangayOtherContainer">
+                      <label for="barangayOther">Specify Barangay</label>
+                      <input type="text" id="barangayOther" name="barangayOther" placeholder="Enter your barangay name" title="Enter your barangay name">
                   </div>
               </div>
               <div class="form-row address-row">
@@ -722,14 +725,16 @@
         // Barangay select: show/hide 'Other' input when appropriate
         document.addEventListener('DOMContentLoaded', function() {
             const barangaySelect = document.getElementById('barangay');
+            const barangayOtherContainer = document.getElementById('barangayOtherContainer');
             const barangayOther = document.getElementById('barangayOther');
+            
             function toggleBarangayOther() {
-                if (!barangaySelect || !barangayOther) return;
+                if (!barangaySelect || !barangayOtherContainer || !barangayOther) return;
                 if (barangaySelect.value === 'Others') {
-                    barangayOther.style.display = '';
+                    barangayOtherContainer.classList.add('show');
                     barangayOther.required = true;
                 } else {
-                    barangayOther.style.display = 'none';
+                    barangayOtherContainer.classList.remove('show');
                     barangayOther.required = false;
                     barangayOther.value = '';
                 }
