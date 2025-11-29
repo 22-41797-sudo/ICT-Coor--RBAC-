@@ -12,14 +12,36 @@ const rateLimit = require('express-rate-limit');
 const dssEngine = require('./dss-engine'); // Import DSS Engine
 const PDFDocument = require('pdfkit'); // Import pdfkit for PDF generation
 const emailService = require('./email-service'); // Import email service for notifications
+const compression = require('compression'); // Import compression middleware
 
 const app = express();
 const port = 3000;
+
+// ============= PERFORMANCE: CACHE VARIABLES =============
+let columnExistsCache = {
+    adviser_teacher_id: null,
+    checked_at: null
+};
+const CACHE_TTL = 5 * 60 * 1000; // Cache for 5 minutes
 
 // ============= PRODUCTION: TRUST PROXY FOR CORRECT IP DETECTION =============
 // CRITICAL: Enable this when deployed behind Nginx, Apache, or cloud platforms
 // This allows Express to correctly read the real client IP from proxy headers
 app.set('trust proxy', true);
+
+// ============= PERFORMANCE: RESPONSE COMPRESSION =============
+// Compress all responses to reduce bandwidth (text, JSON, HTML)
+app.use(compression({
+    filter: (req, res) => {
+        // Don't compress responses with this request header
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        // Use compression filter function
+        return compression.filter(req, res);
+    },
+    level: 6 // Balance between speed and compression ratio
+}));
 
 // Ensure session and parsers are registered BEFORE any routes so req.session is available everywhere
 app.use(session({
@@ -357,17 +379,10 @@ app.get('/api/teacher/sections', requireTeacher, async (req, res) => {
         console.log('Teacher requesting sections - ID:', req.session.user.id, 'Name:', req.session.user.name);
         let result;
         
-        // First, check if adviser_teacher_id column exists
-        const columnCheck = await pool.query(`
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                AND table_name = 'sections' 
-                AND column_name = 'adviser_teacher_id'
-            ) AS has_column
-        `);
+        // Use cached column check instead of querying on every request
+        const hasAdviserTeacherId = await checkColumnExistsCached('adviser_teacher_id');
         
-        if (columnCheck.rows[0].has_column) {
+        if (hasAdviserTeacherId) {
             // Try by teacher ID first
             result = await pool.query(
                 `SELECT id, section_name, grade_level, max_capacity, current_count, adviser_name, room_number
@@ -422,15 +437,8 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
         const teacherId = req.session.user.id;
         const teacherName = req.session.user.name;
 
-        // Check if adviser_teacher_id column exists
-        const columnCheck = await pool.query(`
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                AND table_name = 'sections' 
-                AND column_name = 'adviser_teacher_id'
-            ) AS has_column
-        `);
+        // Use cached column check
+        const hasAdviserTeacherId = await checkColumnExistsCached('adviser_teacher_id');
 
         const orderClause = `
             ORDER BY 
@@ -439,7 +447,7 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
             LIMIT 1
         `;
 
-        if (columnCheck.rows[0].has_column) {
+        if (hasAdviserTeacherId) {
             // Strict by teacher ID
             const byId = await pool.query(
                 `SELECT id, section_name, grade_level, max_capacity, current_count, adviser_name, room_number
@@ -1091,22 +1099,129 @@ const pool = new Pool({
     database: process.env.DB_NAME || 'ICTCOORdb',
     password: process.env.DB_PASSWORD || 'bello0517',
     port: parseInt(process.env.DB_PORT) || 5432,
+    // ============= PERFORMANCE: CONNECTION POOL TUNING =============
+    max: 15, // Maximum number of clients in the pool (reduced for stability)
+    idleTimeoutMillis: 60000, // Close idle clients after 60 seconds
+    connectionTimeoutMillis: 10000, // Connection attempt timeout (increased to 10 seconds)
+    statement_timeout: 30000, // Statement timeout: 30 seconds
 });
 
 // Test database connection
 pool.connect((err, client, release) => {
     if (err) {
         console.error('❌ Error connecting to database:', err.stack);
+        console.error('Connection details:', {
+            host: process.env.DB_HOST || 'localhost',
+            port: process.env.DB_PORT || 5432,
+            database: process.env.DB_NAME || 'ICTCOORdb',
+            user: process.env.DB_USER || 'postgres'
+        });
+        // Don't exit - allow app to continue in case DB recovers
+        setTimeout(() => {
+            console.log('Retrying database connection...');
+            pool.connect((err2, client2, release2) => {
+                if (!err2 && client2) {
+                    console.log('✅ Database reconnected successfully');
+                    release2();
+                    initializeSchemas();
+                }
+            });
+        }, 5000);
     } else {
         console.log('✅ Database connected successfully');
         release();
-        // Attempt to ensure schemas exist
-        ensureDocumentRequestsSchema().catch(e => console.error('Schema init error:', e.message));
-        ensureSubmissionLogsSchema().catch(e => console.error('Logs schema init error:', e.message));
-            ensureBlockedIPsSchema().catch(e => console.error('Blocklist schema init error:', e.message));
-        ensureTeachersArchiveSchema().catch(e => console.error('Teachers archive schema init error:', e.message));
+        initializeSchemas();
     }
 });
+
+/**
+ * Initialize all database schemas and indexes
+ */
+async function initializeSchemas() {
+    try {
+        console.log('📋 Initializing database schemas...');
+        
+        // Initialize all schemas - catch errors individually so one failure doesn't stop others
+        await ensureDocumentRequestsSchema().catch(e => console.error('Document requests schema error:', e.message));
+        await ensureSubmissionLogsSchema().catch(e => console.error('Submission logs schema error:', e.message));
+        await ensureBlockedIPsSchema().catch(e => console.error('Blocked IPs schema error:', e.message));
+        await ensureTeachersArchiveSchema().catch(e => console.error('Teachers archive schema error:', e.message));
+        await ensureEnrollmentRequestsSchema().catch(e => console.error('Enrollment requests schema error:', e.message));
+        await ensureMessagingSchema().catch(e => console.error('Messaging schema error:', e.message));
+        await createPerformanceIndexes().catch(e => console.error('Performance indexes error:', e.message));
+        
+        console.log('✅ All schemas and indexes initialized successfully');
+    } catch (err) {
+        console.error('❌ Schema initialization error:', err.message);
+        // Retry after 5 seconds
+        setTimeout(initializeSchemas, 5000);
+    }
+}
+
+// ============= PERFORMANCE: CREATE INDEXES FOR COMMON QUERIES =============
+async function createPerformanceIndexes() {
+    const indexQueries = [
+        // Sections table indexes
+        `CREATE INDEX IF NOT EXISTS idx_sections_adviser_teacher_id ON sections(adviser_teacher_id) WHERE is_active = true`,
+        `CREATE INDEX IF NOT EXISTS idx_sections_adviser_name ON sections(adviser_name) WHERE is_active = true`,
+        `CREATE INDEX IF NOT EXISTS idx_sections_section_name ON sections(section_name) WHERE is_active = true`,
+        
+        // Students table indexes
+        `CREATE INDEX IF NOT EXISTS idx_students_section_id ON students(section_id) WHERE enrollment_status = 'active'`,
+        `CREATE INDEX IF NOT EXISTS idx_students_lrn ON students(lrn)`,
+        
+        // Behavior reports indexes
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_student_id ON student_behavior_reports(student_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_section_id ON student_behavior_reports(section_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_teacher_id ON student_behavior_reports(teacher_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_report_date ON student_behavior_reports(report_date DESC)`,
+        
+        // Document requests indexes
+        `CREATE INDEX IF NOT EXISTS idx_document_requests_created_at ON document_requests(created_at DESC)`,
+        `CREATE INDEX IF NOT EXISTS idx_document_requests_status_created ON document_requests(status, created_at DESC)`,
+        
+        // Guidance teachers messages indexes
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_guidance_id ON guidance_teacher_messages(guidance_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_teacher_id ON guidance_teacher_messages(teacher_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_created ON guidance_teacher_messages(created_at DESC)`
+    ];
+    
+    try {
+        for (const query of indexQueries) {
+            await pool.query(query);
+        }
+        console.log('✅ Performance indexes created successfully');
+    } catch (err) {
+        console.error('❌ Error creating indexes:', err.message);
+    }
+}
+
+// ============= PERFORMANCE: CACHED COLUMN CHECK =============
+async function checkColumnExistsCached(columnName) {
+    // Return cached result if available and not expired
+    if (columnExistsCache.adviser_teacher_id !== null && 
+        Date.now() - columnExistsCache.checked_at < CACHE_TTL) {
+        return columnExistsCache.adviser_teacher_id;
+    }
+    
+    try {
+        const result = await pool.query(`
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = 'sections' 
+                AND column_name = $1
+            ) AS has_column
+        `, [columnName]);
+        
+        columnExistsCache.adviser_teacher_id = result.rows[0].has_column;
+        columnExistsCache.checked_at = Date.now();
+        return result.rows[0].has_column;
+    } catch (err) {
+        console.error('Error checking column:', err);
+        return false;
+    }
+}
 
 /**
  * Ensures the teachers_archive table exists. Safe to call multiple times.
@@ -1144,9 +1259,14 @@ async function ensureTeachersArchiveSchema() {
     try {
         await pool.query(ddl);
         console.log('✅ teachers_archive schema ensured');
+        
+        // Also ensure is_archived column on teachers table
+        await pool.query(`ALTER TABLE teachers ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_teachers_is_archived ON teachers(is_archived)`);
+        console.log('✅ teachers.is_archived column ensured');
     } catch (err) {
         console.error('❌ Failed ensuring teachers_archive schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1219,7 +1339,7 @@ async function ensureEnrollmentRequestsSchema() {
         console.log('✅ enrollment_requests schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring enrollment_requests schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1273,7 +1393,7 @@ async function ensureDocumentRequestsSchema() {
         console.log('✅ document_requests schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring document_requests schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1306,7 +1426,7 @@ async function ensureSubmissionLogsSchema() {
         console.log('✅ submission_logs schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring submission_logs schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1334,13 +1454,11 @@ async function ensureSubmissionLogsSchema() {
         try {
             await pool.query(ddl);
             console.log('✅ blocked_ips schema ensured');
-        } catch (err) {
-            console.error('❌ Failed ensuring blocked_ips schema:', err.message);
-            throw err;
-        }
+    } catch (err) {
+        console.error('❌ Failed ensuring blocked_ips schema:', err.message);
+        // Don't throw - allow other schemas to initialize
     }
-
-    // ============= SECURITY: IP BLOCKLIST =============
+}    // ============= SECURITY: IP BLOCKLIST =============
     async function isIPBlocked(ip) {
         try {
             const result = await pool.query(`
@@ -5485,24 +5603,8 @@ async function ensureMessagingSchema() {
     }
 }
 
-// Call ensureMessagingSchema on startup (non-blocking)
-ensureMessagingSchema().catch(e => console.error('messaging schema init error', e.message));
-
-// Ensure teachers table has is_archived column (for soft-delete/archive)
-async function ensureTeachersArchiveColumn() {
-    try {
-        // Add column if missing
-        await pool.query(`ALTER TABLE teachers ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false`);
-        // Create index for faster queries
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_teachers_is_archived ON teachers(is_archived)`);
-        console.log('✅ ensureTeachersArchiveColumn OK');
-    } catch (err) {
-        console.error('❌ ensureTeachersArchiveColumn failed:', err && err.message ? err.message : err);
-    }
-}
-
-// Call on startup (non-blocking)
-ensureTeachersArchiveColumn().catch(e => console.error('teachers is_archived init error', e && e.message ? e.message : e));
+// All schema initialization is now handled by initializeSchemas() function
+// (called automatically after database connection is established)
 
 // Archive a sent message (soft-delete)
 app.post('/api/guidance/messages/:id/archive', async (req, res) => {
@@ -6002,6 +6104,4 @@ app.post('/api/test-email', async (req, res) => {
 // Start the server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    // Initialize schemas after server starts
-    initializeSchemas();
 });
