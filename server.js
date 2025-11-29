@@ -495,7 +495,7 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
 
 // Students of a section (teacher must own section)
 app.get('/api/teacher/sections/:id/students', requireTeacher, async (req, res) => {
-    const sectionId = req.params.id;
+    const sectionId = parseInt(req.params.id);
     try {
         let sec;
         try {
@@ -504,7 +504,10 @@ app.get('/api/teacher/sections/:id/students', requireTeacher, async (req, res) =
             // Fallback when adviser_teacher_id column doesn't exist yet
             sec = await pool.query('SELECT id FROM sections WHERE id = $1 AND adviser_name = $2', [sectionId, req.session.user.name]);
         }
-        if (sec.rows.length === 0) return res.status(403).json({ success: false, error: 'Access denied' });
+        if (sec.rows.length === 0) {
+            console.log(`Access denied: Section ${sectionId} not found for teacher ${req.session.user.id} (${req.session.user.name})`);
+            return res.status(403).json({ success: false, error: 'Access denied' });
+        }
         const students = await pool.query(`
             SELECT id, lrn, last_name, first_name, middle_name, ext_name, sex, age, grade_level, contact_number,
                    CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''), ' ', COALESCE(ext_name, '')) as full_name
