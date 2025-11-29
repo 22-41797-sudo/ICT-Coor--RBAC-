@@ -17,6 +17,8 @@
     .token-box { font-weight:700; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background:#f8f9fa; border:1px solid #e9ecef; border-radius:.5rem; padding:.3rem .5rem; }
     .copy-btn { --bs-btn-padding-y: .25rem; --bs-btn-padding-x: .6rem; --bs-btn-font-size: .875rem; }
   </style>
+  <!-- http://localhost:3000/check-status/:token -->
+  <!-- http://localhost:3000/check-status -->
 </head>
 <body>
   <div class="container">
@@ -108,46 +110,23 @@
     </div>
   </div>
   <script>
+    // Download enrollment form
     function downloadEnrollment(token, format) {
-      try {
-        const url = `/download-enrollment/` + token + `?format=` + format;
-        console.log('Downloading from:', url);
-        
-        fetch(url)
-          .then(res => {
-            if (!res.ok) {
-              throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-            }
-            return res.blob();
-          })
-          .then(blob => {
-            const blobUrl = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = `enrollment-` + token + `.` + format;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(blobUrl);
-            document.body.removeChild(a);
-          })
-          .catch(err => {
-            console.error('Download error:', err);
-            alert(`Failed to download: ` + err.message);
-          });
-      } catch (err) {
-        console.error('Download error:', err);
-        alert(`Download error: ` + err.message);
-      }
+      const url = `/download-enrollment/${token}?format=${format}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.click();
     }
 
+    // Copy form to clipboard
     function copyFormToClipboard(token) {
-      fetch(`/api/enrollment/` + token)
+      fetch(`/api/enrollment/${token}`)
         .then(res => res.json())
         .then(data => {
-          let text = 'ENROLLMENT FORM COPY\n';
-          text += '====================\n';
+          let text = `ENROLLMENT FORM COPY\n`;
+          text += `====================\n`;
           for (const [key, value] of Object.entries(data)) {
-            text += key + ': ' + value + '\n';
+            text += `${key}: ${value}\n`;
           }
           navigator.clipboard.writeText(text).then(() => {
             alert('Enrollment form copied to clipboard!');
@@ -169,21 +148,16 @@
         btn.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(el.textContent.trim());
-            const old = btn.textContent;
-            btn.textContent = 'Copied!';
+            const old = btn.textContent; btn.textContent = 'Copied!';
             btn.classList.remove('btn-outline-secondary');
             btn.classList.add('btn-success');
-            setTimeout(() => {
-              btn.textContent = old;
-              btn.classList.add('btn-outline-secondary');
-              btn.classList.remove('btn-success');
-            }, 1200);
+            setTimeout(() => { btn.textContent = old; btn.classList.add('btn-outline-secondary'); btn.classList.remove('btn-success'); }, 1200);
           } catch (e) {
+            // Fallback for older browsers
             const range = document.createRange();
             range.selectNode(el);
             const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
+            sel.removeAllRanges(); sel.addRange(range);
             document.execCommand('copy');
             sel.removeAllRanges();
           }

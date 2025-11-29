@@ -96,6 +96,222 @@
             background-color: #fff7f7 !important;
             box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
         }
+
+        /* Enrollment Success Modal */
+        .enrollment-success-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .enrollment-success-content {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 600px;
+            width: 90%;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            animation: slideUp 0.3s ease-out;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .success-icon {
+            font-size: 48px;
+            text-align: center;
+            color: #10b981;
+            margin-bottom: 20px;
+            animation: bounce 0.6s ease-out;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        .enrollment-success-content h2 {
+            text-align: center;
+            color: #1f2937;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+
+        .success-message {
+            text-align: center;
+            color: #6b7280;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .token-display {
+            background: #f3f4f6;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+        }
+
+        .token-display label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #374151;
+        }
+
+        .token-box {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #d1d5db;
+        }
+
+        #tokenDisplay {
+            flex: 1;
+            font-family: monospace;
+            font-weight: 600;
+            color: #0056b3;
+            word-break: break-all;
+        }
+
+        .copy-token-btn {
+            padding: 8px 16px;
+            background: #0056b3;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .copy-token-btn:hover {
+            background: #004085;
+        }
+
+        .download-options {
+            background: #eff6ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            border: 1px solid #bfdbfe;
+        }
+
+        .download-options h3 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: #1f2937;
+            font-size: 16px;
+        }
+
+        .download-btn,
+        .copy-form-btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: white;
+            color: #0056b3;
+            border: 2px solid #0056b3;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .download-btn:last-child,
+        .copy-form-btn {
+            margin-bottom: 0;
+        }
+
+        .download-btn:hover,
+        .copy-form-btn:hover {
+            background: #0056b3;
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .next-steps {
+            background: #f0fdf4;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            border: 1px solid #bbf7d0;
+        }
+
+        .next-steps h3 {
+            margin-top: 0;
+            color: #1f2937;
+            font-size: 16px;
+        }
+
+        .next-steps ol {
+            margin: 10px 0;
+            padding-left: 20px;
+            color: #4b5563;
+            line-height: 1.8;
+        }
+
+        .next-steps li {
+            margin-bottom: 8px;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .primary-btn,
+        .secondary-btn {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .primary-btn {
+            background: #10b981;
+            color: white;
+        }
+
+        .primary-btn:hover {
+            background: #059669;
+            transform: translateY(-2px);
+        }
+
+        .secondary-btn {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .secondary-btn:hover {
+            background: #d1d5db;
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 <body>
@@ -380,6 +596,129 @@
     // ============= SECURITY: Track form load time =============
     const formLoadTime = Date.now();
     
+    // Success Modal HTML (injected dynamically)
+    function showEnrollmentSuccess(token) {
+        const successHTML = `
+            <div id="enrollmentSuccessModal" class="enrollment-success-modal">
+                <div class="enrollment-success-content">
+                    <div class="success-icon">✓</div>
+                    <h2>Enrollment Submitted Successfully!</h2>
+                    <p class="success-message">Your enrollment request has been submitted. You will receive a confirmation email shortly.</p>
+                    
+                    <div class="token-display">
+                        <label>Your Request Token:</label>
+                        <div class="token-box">
+                            <span id="tokenDisplay">${token}</span>
+                            <button type="button" class="copy-token-btn" onclick="copyToClipboard('${token}')">📋 Copy</button>
+                        </div>
+                    </div>
+
+                    <div class="download-options">
+                        <h3>📥 Download Your Form:</h3>
+                        <button type="button" class="download-btn" onclick="downloadEnrollment('${token}', 'pdf')">
+                            📄 Download as PDF
+                        </button>
+                        <small style="display: block; margin-top: 10px; color: #666;">
+                            Your enrollment form will be downloaded as a PDF file you can save and print.
+                        </small>
+                    </div>
+
+                    <div class="next-steps">
+                        <h3>Next Steps:</h3>
+                        <ol>
+                            <li>Check your email (${document.getElementById('gmail').value}) for confirmation</li>
+                            <li>Save your Request Token for future reference</li>
+                            <li>Use it to check your application status anytime</li>
+                        </ol>
+                    </div>
+
+                    <div class="action-buttons">
+                        <button type="button" class="primary-btn" onclick="goToStatus('${token}')">Check Status</button>
+                        <button type="button" class="secondary-btn" onclick="closeSuccessModal()">Close</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.insertAdjacentHTML('beforeend', successHTML);
+        document.getElementById('enrollmentSuccessModal').style.display = 'flex';
+    }
+
+    function downloadEnrollment(token, format) {
+        try {
+            const url = `/download-enrollment/${token}?format=${format}`;
+            console.log('Downloading from:', url);
+            
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                    }
+                    return res.blob();
+                })
+                .then(blob => {
+                    const blobUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `enrollment-${token}.${format}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(blobUrl);
+                    document.body.removeChild(a);
+                })
+                .catch(err => {
+                    console.error('Download error:', err);
+                    alert(`Failed to download: ${err.message}`);
+                });
+        } catch (err) {
+            console.error('Download error:', err);
+            alert(`Download error: ${err.message}`);
+        }
+    }
+
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            alert('Token copied to clipboard!');
+        }).catch(err => {
+            console.error('Failed to copy:', err);
+            alert('Failed to copy to clipboard');
+        });
+    }
+
+    function copyFormToClipboard(token) {
+        fetch(`/api/enrollment/${token}`)
+            .then(res => res.json())
+            .then(data => {
+                let text = `ENROLLMENT FORM COPY\n`;
+                text += `====================\n`;
+                for (const [key, value] of Object.entries(data)) {
+                    text += `${key}: ${value}\n`;
+                }
+                navigator.clipboard.writeText(text).then(() => {
+                    alert('Enrollment form copied to clipboard!');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    alert('Failed to copy to clipboard');
+                });
+            })
+            .catch(err => {
+                console.error('Error fetching form data:', err);
+                alert('Error copying form data');
+            });
+    }
+
+    function goToStatus(token) {
+        window.location.href = `/check-status/${token}`;
+    }
+
+    function closeSuccessModal() {
+        const modal = document.getElementById('enrollmentSuccessModal');
+        if (modal) {
+            modal.remove();
+        }
+        window.location.href = '/enrollment.html';
+    }
+    
     // Simple signature pad logic
     const canvas = document.getElementById('signaturePad');
     const ctx = canvas.getContext('2d');
@@ -659,9 +998,8 @@
             const result = await response.json();
             
             if (result.success) {
-                // Show success message with token and link to status page
-                alert(`Enrollment request submitted successfully!\n\nYour Request Token: ${result.token}\n\nYou can check your request status anytime at:\nhttp://localhost:3000/check-status/${result.token}`);
-                window.location.href = `/check-status/${result.token}`;
+                // Show success page with download/copy options
+                showEnrollmentSuccess(result.token);
             } else {
                 const msg = result.message || 'Failed to submit enrollment request';
                 alert('Error: ' + msg);
