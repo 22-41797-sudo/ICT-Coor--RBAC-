@@ -410,6 +410,10 @@
     function renderSectionReports() {
       console.log('renderSectionReports called');
       const tbody = document.querySelector('#sectionReportsTable tbody');
+      
+      // Always clear existing rows first
+      tbody.innerHTML = '';
+      
       if (!allReports || allReports.length === 0) {
         console.log('No reports available');
         tbody.innerHTML = '<tr><td colspan="5">No reports for this section yet.</td></tr>';
@@ -443,7 +447,7 @@
         tbody.innerHTML = '<tr><td colspan="5">No reports match the filter.</td></tr>';
         return;
       }
-      tbody.innerHTML = '';
+      
       filtered.forEach(r => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
