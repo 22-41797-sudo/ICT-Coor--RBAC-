@@ -11,6 +11,7 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const dssEngine = require('./dss-engine'); // Import DSS Engine
 const PDFDocument = require('pdfkit'); // Import pdfkit for PDF generation
+const emailService = require('./email-service'); // Import email service for notifications
 
 const app = express();
 const port = 3000;
@@ -2923,6 +2924,10 @@ app.post('/approve-request/:id', async (req, res) => {
             [registrarId, requestId]
         );
 
+        // Send approval notification email
+        const learnerName = `${request.first_name} ${request.last_name}`;
+        await emailService.sendEnrollmentStatusUpdate(request.gmail_address, learnerName, request.request_token, 'approved');
+
         await client.query('COMMIT');
         res.json({ success: true, message: 'Request approved successfully', early_registration_id: inserted.rows[0].id });
     } catch (err) {
@@ -2945,11 +2950,28 @@ app.post('/reject-request/:id', async (req, res) => {
     const { reason } = req.body;
 
     try {
+        // Get request details before updating (for email notification)
+        const requestResult = await pool.query(`
+            SELECT first_name, last_name, gmail_address, request_token 
+            FROM enrollment_requests 
+            WHERE id = $1
+        `, [requestId]);
+        
+        if (requestResult.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Request not found' });
+        }
+        
+        const enrollmentRequest = requestResult.rows[0];
+        
         await pool.query(`
             UPDATE enrollment_requests 
             SET status = 'rejected', reviewed_by = $1, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = $2
             WHERE id = $3
         `, [registrarId, reason || 'No reason provided', requestId]);
+
+        // Send rejection notification email
+        const learnerName = `${enrollmentRequest.first_name} ${enrollmentRequest.last_name}`;
+        await emailService.sendEnrollmentStatusUpdate(enrollmentRequest.gmail_address, learnerName, enrollmentRequest.request_token, 'rejected', reason || 'No reason provided');
 
         res.json({ success: true, message: 'Request rejected' });
     } catch (err) {
@@ -3148,6 +3170,19 @@ app.put('/api/guidance/document-requests/:id/status', async (req, res) => {
     }
 
     try {
+        // Get request details before updating (for email notification)
+        const getQuery = `SELECT * FROM document_requests WHERE id = $1`;
+        const getResult = await pool.query(getQuery, [requestId]);
+        
+        if (getResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Request not found'
+            });
+        }
+        
+        const documentRequest = getResult.rows[0];
+        
         const updateQuery = `
             UPDATE document_requests
             SET status = $1,
@@ -3168,11 +3203,16 @@ app.put('/api/guidance/document-requests/:id/status', async (req, res) => {
             requestId
         ]);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Request not found'
-            });
+        // Send email notification for status updates that warrant notification
+        if (status === 'processing' || status === 'ready' || status === 'rejected') {
+            await emailService.sendDocumentRequestStatusUpdate(
+                documentRequest.email,
+                documentRequest.student_name,
+                documentRequest.request_token,
+                documentRequest.document_type,
+                status,
+                rejection_reason || null
+            );
         }
 
         res.json({
@@ -5923,6 +5963,38 @@ app.get('/api/stats/barangay-distribution', async (req, res) => {
         }});
     } catch (err) {
         console.error('Error computing barangay distribution:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ===== TEST EMAIL ENDPOINT =====
+app.post('/api/test-email', async (req, res) => {
+    const { email, type } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ success: false, error: 'Email required' });
+    }
+
+    try {
+        let result;
+        
+        if (type === 'enrollment-approved') {
+            result = await emailService.sendEnrollmentStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'approved');
+        } else if (type === 'enrollment-rejected') {
+            result = await emailService.sendEnrollmentStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'rejected', 'Test rejection reason');
+        } else if (type === 'document-processing') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'processing');
+        } else if (type === 'document-ready') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'ready');
+        } else if (type === 'document-rejected') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'rejected', 'Test rejection reason');
+        } else {
+            return res.status(400).json({ success: false, error: 'Invalid type' });
+        }
+
+        res.json({ success: result, message: result ? 'Test email sent successfully' : 'Failed to send test email' });
+    } catch (err) {
+        console.error('Error sending test email:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
