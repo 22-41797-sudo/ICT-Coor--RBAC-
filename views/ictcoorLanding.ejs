@@ -867,8 +867,8 @@ q<!DOCTYPE html>
                             <div style="min-width:1px;"></div>
                         </div>
                         <!-- Snapshot overlay controls removed per request -->
-                        <div style="height: 240px;">
-                            <canvas id="enrollmentTrendChart"></canvas>
+                        <div style="position: relative; height: 240px; width: 100%;">
+                            <canvas id="enrollmentTrendChart" style="max-width: 100%;"></canvas>
                         </div>
                         <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
                             <button id="toggleInterpretationBtn" type="button" class="btn btn-cancel" style="padding:8px 12px; font-size:13px;" onclick="toggleInterpretation()">Show insights</button>
@@ -877,12 +877,12 @@ q<!DOCTYPE html>
                     </div>
                     <div class="card" style="padding: 16px; border-radius: 12px; background: var(--white); box-shadow: var(--shadow-md);">
                         <h3 class="stat-title" style="margin-bottom: 8px;">Gender Distribution</h3>
-                        <div style="height: 240px;">
-                            <canvas id="genderDistributionChart"></canvas>
+                        <div style="position: relative; height: 240px; width: 100%;">
+                            <canvas id="genderDistributionChart" style="max-width: 100%;"></canvas>
                         </div>
                         <h3 class="stat-title" style="margin-top:12px; margin-bottom:8px;">Barangay Distribution</h3>
-                        <div style="height: 200px;">
-                            <canvas id="barangayDistributionChart"></canvas>
+                        <div style="position: relative; height: 200px; width: 100%;">
+                            <canvas id="barangayDistributionChart" style="max-width: 100%;"></canvas>
                         </div>
                     </div>
                 </div>
@@ -1002,13 +1002,13 @@ q<!DOCTYPE html>
                                             </td>
                                             <td class="table-actions">
                                                 <button class="btn btn-edit" 
-                                                    data-student-id="<%= student.enrollment_id %>" 
+                                                    data-student-id="<%= student.id %>" 
                                                     onclick="openStudentDetails(this.dataset.studentId)">
                                                     <i class="fas fa-eye"></i> View
                                                 </button>
                                                 <% if (student.enrollment_status === 'pending' || !student.assigned_section) { %>
                                                     <button class="btn btn-confirm" 
-                                                        data-student-id="<%= student.enrollment_id %>" 
+                                                        data-student-id="<%= student.id %>" 
                                                         data-student-name="<%= student.full_name %>" 
                                                         data-current-section="<%= student.assigned_section || '' %>"
                                                         onclick="openAssignSectionModal(this.dataset.studentId, this.dataset.studentName, this.dataset.currentSection)">
@@ -1016,7 +1016,7 @@ q<!DOCTYPE html>
                                                     </button>
                                                 <% } else { %>
                                                     <button class="action-btn action-reassign" 
-                                                        data-student-id="<%= student.enrollment_id %>" 
+                                                        data-student-id="<%= student.id %>" 
                                                         data-student-name="<%= student.full_name %>"
                                                         data-current-section="<%= student.assigned_section || '' %>"
                                                         type="button" onclick="openReassignModal(this.dataset.studentId, this.dataset.studentName, '', this.dataset.currentSection)">
@@ -1024,7 +1024,7 @@ q<!DOCTYPE html>
                                                     </button>
 
                                                     <button class="action-btn action-delete" 
-                                                        data-student-id="<%= student.enrollment_id %>" 
+                                                        data-student-id="<%= student.id %>" 
                                                         data-student-name="<%= student.full_name %>"
                                                         onclick="openConfirmRemoveFromSectionModal(this.dataset.studentId, this.dataset.studentName, '')">
                                                         <i class="fas fa-user-minus"></i> Remove
@@ -2756,10 +2756,10 @@ q<!DOCTYPE html>
                                 <td style="padding:8px;">${lrn}</td>
                                 <td style="padding:8px;">${sname}</td>
                                 <td style="padding:8px;">
-                                    <button type="button" class="action-btn action-edit" onclick="openReassignModal(${sid}, '${sname}', ${id}, '${escapeHtml(gradeLevel + ' - ' + name)}')" style="margin-right:6px;">
+                                    <button type="button" class="action-btn action-edit" onclick="openReassignModal('${sid}', '${sname}', ${id}, '${escapeHtml(gradeLevel + ' - ' + name)}')" style="margin-right:6px;">
                                         <i class="fas fa-exchange-alt"></i> Reassign
                                     </button>
-                                    <button type="button" class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal(${sid}, '${sname}', ${id})">
+                                    <button type="button" class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal('${sid}', '${sname}', ${id})">
                                         <i class="fas fa-user-minus"></i> Remove
                                     </button>
                                 </td>
@@ -2922,13 +2922,13 @@ q<!DOCTYPE html>
                                     <td>${student.contact_number || '-'}</td>
                                     <td>${enrollmentDate}</td>
                                     <td class="table-actions">
-                                        <button type="button" class="action-btn action-view" title="View details" onclick="openStudentDetails(${student.id})">
+                                        <button type="button" class="action-btn action-view" title="View details" onclick="openStudentDetails('${student.id}')">
                                             <i class="fas fa-eye"></i> View
                                         </button>
-                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId}, '${(gradeLevel + ' - ' + sectionName).replace(/'/g, "\\'")}')">
+                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal('${student.id}', '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId}, '${(gradeLevel + ' - ' + sectionName).replace(/'/g, "\\'")}')">
                                             <i class="fas fa-exchange-alt"></i> Reassign
                                         </button>
-                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId})">
+                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection('${student.id}', '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId})">
                                             <i class="fas fa-user-minus"></i> Remove
                                         </button>
                                     </td>
@@ -3098,7 +3098,7 @@ q<!DOCTYPE html>
                                 <td>${student.contact_number || '-'}</td>
                                 <td>${enrollmentDate}</td>
                                 <td class="table-actions">
-                                    <button class="action-btn action-edit" title="Assign to section" onclick="assignUnassignedStudent(${student.id}, '${student.full_name}')">
+                                    <button class="action-btn action-edit" title="Assign to section" data-student-id="${student.id}" data-student-name="${student.full_name}" onclick="assignUnassignedStudent(this.dataset.studentId, this.dataset.studentName)">
                                         <i class="fas fa-user-plus"></i> Assign
                                     </button>
                                 </td>
@@ -3184,29 +3184,29 @@ q<!DOCTYPE html>
 
                 // Actions: View always; if unassigned show Assign; if assigned show Reassign + Remove; if archived show Restore
                 let actions = `
-                    <button class="action-btn action-view" onclick="openStudentDetails(${sid})" title="View details">
+                    <button class="action-btn action-view" onclick="openStudentDetails('${sid}')" title="View details">
                         <i class="fas fa-eye"></i> View
                     </button>`;
 
                 if (!student.is_archived && (!student.assigned_section || student.enrollment_status === 'pending')) {
                     actions += `
-                        <button class="action-btn action-edit" onclick="openAssignSectionModal(${sid}, '${name}', '${assignedSectionName}')" title="Assign to section">
+                        <button class="action-btn action-edit" onclick="openAssignSectionModal('${sid}', '${name}', '${assignedSectionName}')" title="Assign to section">
                             <i class="fas fa-users"></i> Assign
                         </button>`;
                 } else if (!student.is_archived && student.assigned_section) {
                     // Reassign and Remove for assigned students
                     actions += `
-                        <button type="button" class="action-btn action-edit" onclick="openReassignModal(${sid}, '${name}', '', '${assignedSectionName}')" title="Reassign to another section">
+                        <button type="button" class="action-btn action-edit" onclick="openReassignModal('${sid}', '${name}', '', '${assignedSectionName}')" title="Reassign to another section">
                             <i class="fas fa-exchange-alt"></i> Reassign
                         </button>
-                        <button class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal(${sid}, '${name}', '')" title="Remove from section">
+                        <button class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal('${sid}', '${name}', '')" title="Remove from section">
                             <i class="fas fa-user-minus"></i> Remove
                         </button>`;
                 }
 
                 if (student.is_archived) {
                     actions += `
-                        <button class="action-btn action-edit" onclick="unarchiveStudent(${sid}, '${name}')" title="Restore student">
+                        <button class="action-btn action-edit" onclick="unarchiveStudent('${sid}', '${name}')" title="Restore student">
                             <i class="fas fa-undo"></i> Restore
                         </button>`;
                 }
@@ -3602,18 +3602,28 @@ q<!DOCTYPE html>
                     });
                 }
 
-                // Charts
-                // Default to the snapshots chart (controls removed)
-                try { await plotSnapshotsBySY(); } catch (e) { console.warn('Failed to plot snapshots by SY on load', e); }
-                renderGenderDistributionChart(m.students.male, m.students.female);
-                // Load barangay distribution and render chart
-                try {
-                    const r = await fetch('/api/stats/barangay-distribution');
-                    const jr = await r.json();
-                    if (jr && jr.success && jr.counts) {
-                        renderBarangayDistributionChart(jr.counts);
+                // Give DOM time to settle before rendering charts
+                setTimeout(() => {
+                    try {
+                        // Charts
+                        // Default to the snapshots chart (controls removed)
+                        try { plotSnapshotsBySY(); } catch (e) { console.warn('Failed to plot snapshots by SY on load', e); }
+                        renderGenderDistributionChart(m.students.male, m.students.female);
+                        // Load barangay distribution and render chart
+                        try {
+                            fetch('/api/stats/barangay-distribution')
+                                .then(r => r.json())
+                                .then(jr => {
+                                    if (jr && jr.success && jr.counts) {
+                                        renderBarangayDistributionChart(jr.counts);
+                                    }
+                                })
+                                .catch(e => console.warn('Failed to load barangay distribution', e));
+                        } catch (e) { console.warn('Failed to load barangay distribution', e); }
+                    } catch (err) {
+                        console.error('Chart rendering error:', err);
                     }
-                } catch (e) { console.warn('Failed to load barangay distribution', e); }
+                }, 100);
             } catch (err) {
                 console.error('Dashboard load error:', err);
             }
@@ -3716,7 +3726,10 @@ q<!DOCTYPE html>
         // Render a snapshots chart for provided rows = [{name, total}, ...]
         function renderSnapshotsChart(rows) {
             const ctx = document.getElementById('enrollmentTrendChart');
-            if (!ctx) return;
+            if (!ctx) {
+                console.error('Chart canvas not found: enrollmentTrendChart');
+                return;
+            }
             // Sort rows by year extracted from name if possible
             rows.sort((a,b) => {
                 const pa = (a.name || '').match(/(\d{4})/); const pb = (b.name || '').match(/(\d{4})/);
@@ -3734,24 +3747,44 @@ q<!DOCTYPE html>
                     datasets: [{
                         label: 'Students',
                         data: values,
-                        borderColor: '#1f78b4',
-                        backgroundColor: 'rgba(31,120,180,0.08)',
-                        fill: false,
-                        tension: 0.2,
-                        pointBackgroundColor: '#1f78b4',
-                        pointRadius: 6,
-                        pointHoverRadius: 8
+                        borderColor: '#DC2626',
+                        backgroundColor: 'rgba(220, 38, 38, 0.08)',
+                        fill: true,
+                        tension: 0.3,
+                        pointBackgroundColor: '#DC2626',
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        borderWidth: 2
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        x: { title: { display: true, text: 'School Year' } },
-                        y: { beginAtZero: true, title: { display: true, text: 'Student Count' } }
+                        x: { 
+                            title: { display: true, text: 'School Year' },
+                            grid: { display: false }
+                        },
+                        y: { 
+                            beginAtZero: true, 
+                            title: { display: true, text: 'Student Count' },
+                            grid: { color: 'rgba(0, 0, 0, 0.05)' }
+                        }
                     },
                     plugins: {
-                        tooltip: { mode: 'nearest', intersect: true }
+                        tooltip: { 
+                            mode: 'nearest', 
+                            intersect: false,
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleFont: { size: 12, weight: 'bold' },
+                            bodyFont: { size: 11 },
+                            padding: 10,
+                            borderRadius: 4
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
                     }
                 }
             });

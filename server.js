@@ -12,14 +12,36 @@ const rateLimit = require('express-rate-limit');
 const dssEngine = require('./dss-engine'); // Import DSS Engine
 const PDFDocument = require('pdfkit'); // Import pdfkit for PDF generation
 const emailService = require('./email-service'); // Import email service for notifications
+const compression = require('compression'); // Import compression middleware
 
 const app = express();
 const port = 3000;
+
+// ============= PERFORMANCE: CACHE VARIABLES =============
+let columnExistsCache = {
+    adviser_teacher_id: null,
+    checked_at: null
+};
+const CACHE_TTL = 5 * 60 * 1000; // Cache for 5 minutes
 
 // ============= PRODUCTION: TRUST PROXY FOR CORRECT IP DETECTION =============
 // CRITICAL: Enable this when deployed behind Nginx, Apache, or cloud platforms
 // This allows Express to correctly read the real client IP from proxy headers
 app.set('trust proxy', true);
+
+// ============= PERFORMANCE: RESPONSE COMPRESSION =============
+// Compress all responses to reduce bandwidth (text, JSON, HTML)
+app.use(compression({
+    filter: (req, res) => {
+        // Don't compress responses with this request header
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        // Use compression filter function
+        return compression.filter(req, res);
+    },
+    level: 6 // Balance between speed and compression ratio
+}));
 
 // Ensure session and parsers are registered BEFORE any routes so req.session is available everywhere
 app.use(session({
@@ -357,17 +379,10 @@ app.get('/api/teacher/sections', requireTeacher, async (req, res) => {
         console.log('Teacher requesting sections - ID:', req.session.user.id, 'Name:', req.session.user.name);
         let result;
         
-        // First, check if adviser_teacher_id column exists
-        const columnCheck = await pool.query(`
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                AND table_name = 'sections' 
-                AND column_name = 'adviser_teacher_id'
-            ) AS has_column
-        `);
+        // Use cached column check instead of querying on every request
+        const hasAdviserTeacherId = await checkColumnExistsCached('adviser_teacher_id');
         
-        if (columnCheck.rows[0].has_column) {
+        if (hasAdviserTeacherId) {
             // Try by teacher ID first
             result = await pool.query(
                 `SELECT id, section_name, grade_level, max_capacity, current_count, adviser_name, room_number
@@ -422,15 +437,8 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
         const teacherId = req.session.user.id;
         const teacherName = req.session.user.name;
 
-        // Check if adviser_teacher_id column exists
-        const columnCheck = await pool.query(`
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                AND table_name = 'sections' 
-                AND column_name = 'adviser_teacher_id'
-            ) AS has_column
-        `);
+        // Use cached column check
+        const hasAdviserTeacherId = await checkColumnExistsCached('adviser_teacher_id');
 
         const orderClause = `
             ORDER BY 
@@ -439,7 +447,7 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
             LIMIT 1
         `;
 
-        if (columnCheck.rows[0].has_column) {
+        if (hasAdviserTeacherId) {
             // Strict by teacher ID
             const byId = await pool.query(
                 `SELECT id, section_name, grade_level, max_capacity, current_count, adviser_name, room_number
@@ -487,7 +495,7 @@ app.get('/api/teacher/assigned-section', requireTeacher, async (req, res) => {
 
 // Students of a section (teacher must own section)
 app.get('/api/teacher/sections/:id/students', requireTeacher, async (req, res) => {
-    const sectionId = req.params.id;
+    const sectionId = parseInt(req.params.id);
     try {
         let sec;
         try {
@@ -496,7 +504,10 @@ app.get('/api/teacher/sections/:id/students', requireTeacher, async (req, res) =
             // Fallback when adviser_teacher_id column doesn't exist yet
             sec = await pool.query('SELECT id FROM sections WHERE id = $1 AND adviser_name = $2', [sectionId, req.session.user.name]);
         }
-        if (sec.rows.length === 0) return res.status(403).json({ success: false, error: 'Access denied' });
+        if (sec.rows.length === 0) {
+            console.log(`Access denied: Section ${sectionId} not found for teacher ${req.session.user.id} (${req.session.user.name})`);
+            return res.status(403).json({ success: false, error: 'Access denied' });
+        }
         const students = await pool.query(`
             SELECT id, lrn, last_name, first_name, middle_name, ext_name, sex, age, grade_level, contact_number,
                    CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''), ' ', COALESCE(ext_name, '')) as full_name
@@ -540,10 +551,90 @@ app.get('/api/teacher/students/:id', requireTeacher, async (req, res) => {
     }
 });
 
+// Auto-calculate severity based on category, notes content, and report history
+function calculateSeverity(category, notes, priorReportCount) {
+    // High-risk keywords that escalate severity
+    const highRiskKeywords = ['weapon', 'knife', 'gun', 'injured', 'blood', 'assault', 'hit', 'punch', 'kick', 'stab', 'sexual', 'abuse', 'death', 'kill', 'suicide', 'bomb', 'threat'];
+    const mediumRiskKeywords = ['fight', 'hurt', 'pain', 'emergency', 'police', 'hospital', 'broken', 'severe', 'serious', 'dangerous'];
+    const lowRiskKeywords = ['late', 'absent', 'incomplete', 'forgotten', 'minor', 'small', 'talk', 'chat', 'whisper', 'distract'];
+    
+    // Severity level keywords from notes
+    const highSeverityKeywords = ['critical', 'urgent', 'emergency', 'severe', 'serious', 'high priority', 'immediate action'];
+    const mediumSeverityKeywords = ['moderate', 'concern', 'issue', 'problem', 'notable', 'attention needed'];
+    const lowSeverityKeywords = ['minor', 'small', 'trivial', 'low priority', 'negligible'];
+    
+    const notesLower = (notes || '').toLowerCase();
+    
+    // Check for explicit severity keywords in notes first
+    if (highSeverityKeywords.some(kw => notesLower.includes(kw))) {
+        // If notes explicitly mention high severity, escalate
+        if (!lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+    }
+    
+    if (lowSeverityKeywords.some(kw => notesLower.includes(kw))) {
+        // If notes explicitly mention low severity, keep it low unless it's a high-risk category
+        if (!highRiskKeywords.some(kw => notesLower.includes(kw)) && !mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'Low';
+        }
+    }
+    
+    // Severity mapping: High-risk categories get High immediately
+    const highRiskCategories = ['Violence/Aggression', 'Sexual Misconduct', 'Threats'];
+    if (highRiskCategories.includes(category)) {
+        // Check if notes contain high-risk keywords - keep it High
+        if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+        // For high-risk categories, default to High unless notes suggest otherwise
+        return priorReportCount === 0 ? 'Medium' : 'High';
+    }
+    
+    // Medium-risk categories
+    const mediumRiskCategories = ['Vandalism', 'Safety'];
+    if (mediumRiskCategories.includes(category)) {
+        // Check for high-risk keywords in notes
+        if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+        // Check for low-risk keywords (downgrade severity)
+        if (lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'Low';
+        }
+        // Check for medium-risk keywords
+        if (mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return priorReportCount > 0 ? 'High' : 'Medium';
+        }
+        return priorReportCount > 0 ? 'High' : 'Medium';
+    }
+    
+    // Low-risk categories (Disruption, Disrespect, Other)
+    // Check for high-risk keywords in notes first
+    if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return 'High';
+    }
+    
+    // Check for low-risk keywords (keep it low)
+    if (lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return priorReportCount === 0 ? 'Low' : (priorReportCount === 1 ? 'Medium' : 'High');
+    }
+    
+    // Check for medium-risk keywords
+    if (mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return priorReportCount >= 1 ? 'High' : 'Medium';
+    }
+    
+    // Escalate based on frequency for low-risk
+    if (priorReportCount === 0) return 'Low';
+    if (priorReportCount === 1) return 'Medium';
+    return 'High';
+}
+
 // Behavior reports: create
 app.post('/api/behavior-reports', requireTeacher, async (req, res) => {
-    const { studentId, sectionId, category, severity, notes, reportDate } = req.body || {};
-    if (!studentId || !sectionId || !category || !severity) {
+    const { studentId, sectionId, category, notes, reportDate } = req.body || {};
+    if (!studentId || !sectionId || !category) {
         return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
     try {
@@ -556,6 +647,17 @@ app.post('/api/behavior-reports', requireTeacher, async (req, res) => {
         if (sec.rows.length === 0) return res.status(403).json({ success: false, error: 'Access denied' });
         const st = await pool.query('SELECT id FROM students WHERE id = $1 AND section_id = $2', [studentId, sectionId]);
         if (st.rows.length === 0) return res.status(400).json({ success: false, error: 'Student not in your section' });
+        
+        // Get prior report count for this student
+        const priorReports = await pool.query(
+            'SELECT COUNT(*) as count FROM student_behavior_reports WHERE student_id = $1',
+            [studentId]
+        );
+        const priorReportCount = parseInt(priorReports.rows[0].count) || 0;
+        
+        // Auto-calculate severity based on category, notes, and history
+        const severity = calculateSeverity(category, notes, priorReportCount);
+        
         const result = await pool.query(`
             INSERT INTO student_behavior_reports (student_id, section_id, teacher_id, report_date, category, severity, notes)
             VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7)
@@ -1091,22 +1193,129 @@ const pool = new Pool({
     database: process.env.DB_NAME || 'ICTCOORdb',
     password: process.env.DB_PASSWORD || 'bello0517',
     port: parseInt(process.env.DB_PORT) || 5432,
+    // ============= PERFORMANCE: CONNECTION POOL TUNING =============
+    max: 15, // Maximum number of clients in the pool (reduced for stability)
+    idleTimeoutMillis: 60000, // Close idle clients after 60 seconds
+    connectionTimeoutMillis: 10000, // Connection attempt timeout (increased to 10 seconds)
+    statement_timeout: 30000, // Statement timeout: 30 seconds
 });
 
 // Test database connection
 pool.connect((err, client, release) => {
     if (err) {
         console.error('❌ Error connecting to database:', err.stack);
+        console.error('Connection details:', {
+            host: process.env.DB_HOST || 'localhost',
+            port: process.env.DB_PORT || 5432,
+            database: process.env.DB_NAME || 'ICTCOORdb',
+            user: process.env.DB_USER || 'postgres'
+        });
+        // Don't exit - allow app to continue in case DB recovers
+        setTimeout(() => {
+            console.log('Retrying database connection...');
+            pool.connect((err2, client2, release2) => {
+                if (!err2 && client2) {
+                    console.log('✅ Database reconnected successfully');
+                    release2();
+                    initializeSchemas();
+                }
+            });
+        }, 5000);
     } else {
         console.log('✅ Database connected successfully');
         release();
-        // Attempt to ensure schemas exist
-        ensureDocumentRequestsSchema().catch(e => console.error('Schema init error:', e.message));
-        ensureSubmissionLogsSchema().catch(e => console.error('Logs schema init error:', e.message));
-            ensureBlockedIPsSchema().catch(e => console.error('Blocklist schema init error:', e.message));
-        ensureTeachersArchiveSchema().catch(e => console.error('Teachers archive schema init error:', e.message));
+        initializeSchemas();
     }
 });
+
+/**
+ * Initialize all database schemas and indexes
+ */
+async function initializeSchemas() {
+    try {
+        console.log('📋 Initializing database schemas...');
+        
+        // Initialize all schemas - catch errors individually so one failure doesn't stop others
+        await ensureDocumentRequestsSchema().catch(e => console.error('Document requests schema error:', e.message));
+        await ensureSubmissionLogsSchema().catch(e => console.error('Submission logs schema error:', e.message));
+        await ensureBlockedIPsSchema().catch(e => console.error('Blocked IPs schema error:', e.message));
+        await ensureTeachersArchiveSchema().catch(e => console.error('Teachers archive schema error:', e.message));
+        await ensureEnrollmentRequestsSchema().catch(e => console.error('Enrollment requests schema error:', e.message));
+        await ensureMessagingSchema().catch(e => console.error('Messaging schema error:', e.message));
+        await createPerformanceIndexes().catch(e => console.error('Performance indexes error:', e.message));
+        
+        console.log('✅ All schemas and indexes initialized successfully');
+    } catch (err) {
+        console.error('❌ Schema initialization error:', err.message);
+        // Retry after 5 seconds
+        setTimeout(initializeSchemas, 5000);
+    }
+}
+
+// ============= PERFORMANCE: CREATE INDEXES FOR COMMON QUERIES =============
+async function createPerformanceIndexes() {
+    const indexQueries = [
+        // Sections table indexes
+        `CREATE INDEX IF NOT EXISTS idx_sections_adviser_teacher_id ON sections(adviser_teacher_id) WHERE is_active = true`,
+        `CREATE INDEX IF NOT EXISTS idx_sections_adviser_name ON sections(adviser_name) WHERE is_active = true`,
+        `CREATE INDEX IF NOT EXISTS idx_sections_section_name ON sections(section_name) WHERE is_active = true`,
+        
+        // Students table indexes
+        `CREATE INDEX IF NOT EXISTS idx_students_section_id ON students(section_id) WHERE enrollment_status = 'active'`,
+        `CREATE INDEX IF NOT EXISTS idx_students_lrn ON students(lrn)`,
+        
+        // Behavior reports indexes
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_student_id ON student_behavior_reports(student_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_section_id ON student_behavior_reports(section_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_teacher_id ON student_behavior_reports(teacher_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_behavior_reports_report_date ON student_behavior_reports(report_date DESC)`,
+        
+        // Document requests indexes
+        `CREATE INDEX IF NOT EXISTS idx_document_requests_created_at ON document_requests(created_at DESC)`,
+        `CREATE INDEX IF NOT EXISTS idx_document_requests_status_created ON document_requests(status, created_at DESC)`,
+        
+        // Guidance teachers messages indexes
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_guidance_id ON guidance_teacher_messages(guidance_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_teacher_id ON guidance_teacher_messages(teacher_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_guidance_messages_created ON guidance_teacher_messages(created_at DESC)`
+    ];
+    
+    try {
+        for (const query of indexQueries) {
+            await pool.query(query);
+        }
+        console.log('✅ Performance indexes created successfully');
+    } catch (err) {
+        console.error('❌ Error creating indexes:', err.message);
+    }
+}
+
+// ============= PERFORMANCE: CACHED COLUMN CHECK =============
+async function checkColumnExistsCached(columnName) {
+    // Return cached result if available and not expired
+    if (columnExistsCache.adviser_teacher_id !== null && 
+        Date.now() - columnExistsCache.checked_at < CACHE_TTL) {
+        return columnExistsCache.adviser_teacher_id;
+    }
+    
+    try {
+        const result = await pool.query(`
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = 'sections' 
+                AND column_name = $1
+            ) AS has_column
+        `, [columnName]);
+        
+        columnExistsCache.adviser_teacher_id = result.rows[0].has_column;
+        columnExistsCache.checked_at = Date.now();
+        return result.rows[0].has_column;
+    } catch (err) {
+        console.error('Error checking column:', err);
+        return false;
+    }
+}
 
 /**
  * Ensures the teachers_archive table exists. Safe to call multiple times.
@@ -1144,9 +1353,14 @@ async function ensureTeachersArchiveSchema() {
     try {
         await pool.query(ddl);
         console.log('✅ teachers_archive schema ensured');
+        
+        // Also ensure is_archived column on teachers table
+        await pool.query(`ALTER TABLE teachers ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_teachers_is_archived ON teachers(is_archived)`);
+        console.log('✅ teachers.is_archived column ensured');
     } catch (err) {
         console.error('❌ Failed ensuring teachers_archive schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1219,7 +1433,7 @@ async function ensureEnrollmentRequestsSchema() {
         console.log('✅ enrollment_requests schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring enrollment_requests schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1273,7 +1487,7 @@ async function ensureDocumentRequestsSchema() {
         console.log('✅ document_requests schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring document_requests schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1306,7 +1520,7 @@ async function ensureSubmissionLogsSchema() {
         console.log('✅ submission_logs schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring submission_logs schema:', err.message);
-        throw err;
+        // Don't throw - allow other schemas to initialize
     }
 }
 
@@ -1334,13 +1548,11 @@ async function ensureSubmissionLogsSchema() {
         try {
             await pool.query(ddl);
             console.log('✅ blocked_ips schema ensured');
-        } catch (err) {
-            console.error('❌ Failed ensuring blocked_ips schema:', err.message);
-            throw err;
-        }
+    } catch (err) {
+        console.error('❌ Failed ensuring blocked_ips schema:', err.message);
+        // Don't throw - allow other schemas to initialize
     }
-
-    // ============= SECURITY: IP BLOCKLIST =============
+}    // ============= SECURITY: IP BLOCKLIST =============
     async function isIPBlocked(ip) {
         try {
             const result = await pool.query(`
@@ -1765,17 +1977,43 @@ app.get('/registrar', async (req, res) => {
             ORDER BY reviewed_at DESC
         `);
         
+        // Calculate metrics for insights
+        const totalRequests = requestsResult.rows.length;
+        const approvedCount = requestsResult.rows.filter(r => r.status === 'approved').length;
+        const rejectedCount = requestsResult.rows.filter(r => r.status === 'rejected').length;
+        const pendingCount = requestsResult.rows.filter(r => r.status === 'pending').length;
+        
+        // Count today's requests
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayRequests = requestsResult.rows.filter(r => {
+            const requestDate = new Date(r.date_submitted);
+            requestDate.setHours(0, 0, 0, 0);
+            return requestDate.getTime() === today.getTime();
+        }).length;
+        
         res.render('registrarDashboard', { 
             registrations: result.rows,
             requests: requestsResult.rows,
-            history: historyResult.rows
+            history: historyResult.rows,
+            // Insights metrics
+            totalRequests: totalRequests,
+            approvedCount: approvedCount,
+            rejectedCount: rejectedCount,
+            pendingCount: pendingCount,
+            todayRequests: todayRequests
         });
     } catch (err) {
         console.error('Error fetching registrations:', err);
         res.render('registrarDashboard', { 
             registrations: [],
             requests: [],
-            history: []
+            history: [],
+            totalRequests: 0,
+            approvedCount: 0,
+            rejectedCount: 0,
+            pendingCount: 0,
+            todayRequests: 0
         });
     }
 });
@@ -2282,7 +2520,7 @@ app.get('/ictcoorLanding', async (req, res) => {
                 st.contact_number,
                 sec.section_name as assigned_section,
                 st.school_year,
-                st.enrollment_date,
+                COALESCE(st.created_at, CURRENT_TIMESTAMP)::date as enrollment_date,
                 st.enrollment_status
             FROM students st
             LEFT JOIN sections sec ON st.section_id = sec.id
@@ -2306,7 +2544,7 @@ app.get('/ictcoorLanding', async (req, res) => {
         // Also fetch enrollees who haven't been assigned yet (for backward compatibility)
         const enrolleesResult = await pool.query(`
             SELECT 
-                er.id,
+                'ER' || er.id::text as id,
                 er.id as enrollment_id,
                 CONCAT(er.last_name, ', ', er.first_name, ' ', COALESCE(er.middle_name, ''), ' ', COALESCE(er.ext_name, '')) as full_name,
                 er.lrn,
@@ -2314,13 +2552,13 @@ app.get('/ictcoorLanding', async (req, res) => {
                 er.sex,
                 er.age,
                 er.contact_number,
-                er.assigned_section,
+                NULL as assigned_section,
                 er.school_year,
                 er.created_at as enrollment_date,
                 'pending' as enrollment_status
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::text
             )
             ORDER BY 
                 CASE 
@@ -3278,109 +3516,164 @@ app.post('/assign-section/:id', async (req, res) => {
         return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const enrollmentId = req.params.id;
-    const { section } = req.body; // This will now be section_id from the frontend
+    const studentIdentifier = req.params.id;
+    const { section } = req.body;
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // 1. Get the enrollee data from early_registration
-        const enrolleeResult = await client.query(`
-            SELECT * FROM early_registration WHERE id = $1
-        `, [enrollmentId]);
+        // Check if this is an early_registration student (ID starts with 'ER')
+        if (String(studentIdentifier).startsWith('ER')) {
+            // Extract the actual early_registration ID
+            const earlyRegId = parseInt(String(studentIdentifier).substring(2));
 
-        if (enrolleeResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'Enrollee not found' });
-        }
+            // Get early_registration details
+            const enrolleeResult = await client.query(`
+                SELECT * FROM early_registration WHERE id = $1
+            `, [earlyRegId]);
 
-        const enrollee = enrolleeResult.rows[0];
+            if (enrolleeResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Enrollee not found' });
+            }
 
-        // 2. Verify section exists and has capacity
-        const sectionResult = await client.query(`
-            SELECT id, section_name, max_capacity, current_count 
-            FROM sections 
-            WHERE id = $1 AND is_active = true
-        `, [section]);
+            const enrollee = enrolleeResult.rows[0];
 
-        if (sectionResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'Section not found or inactive' });
-        }
+            // Verify section exists and has capacity
+            const sectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [section]);
 
-        const sectionData = sectionResult.rows[0];
+            if (sectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Section not found or inactive' });
+            }
 
-        if (sectionData.current_count >= sectionData.max_capacity) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                success: false, 
-                message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+            const sectionData = sectionResult.rows[0];
+
+            if (sectionData.current_count >= sectionData.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+                });
+            }
+
+            // Check if this enrollee is already in students table
+            const existingStudent = await client.query(`
+                SELECT id FROM students WHERE enrollment_id = $1
+            `, [earlyRegId]);
+
+            if (existingStudent.rows.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'This enrollee has already been assigned to a section' });
+            }
+
+            // Insert into students table
+            const insertQuery = `
+                INSERT INTO students (
+                    enrollment_id, section_id,
+                    gmail_address, school_year, lrn, grade_level,
+                    last_name, first_name, middle_name, ext_name,
+                    birthday, age, sex, religion, current_address,
+                    ip_community, ip_community_specify, pwd, pwd_specify,
+                    father_name, mother_name, guardian_name, contact_number,
+                    enrollment_status, is_archived
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'active', false)
+                RETURNING id
+            `;
+
+            const insertValues = [
+                earlyRegId, section,
+                enrollee.gmail_address, enrollee.school_year, enrollee.lrn, enrollee.grade_level,
+                enrollee.last_name, enrollee.first_name, enrollee.middle_name, enrollee.ext_name,
+                enrollee.birthday, enrollee.age, enrollee.sex, enrollee.religion, enrollee.current_address,
+                enrollee.ip_community, enrollee.ip_community_specify, enrollee.pwd, enrollee.pwd_specify,
+                enrollee.father_name, enrollee.mother_name, enrollee.guardian_name, enrollee.contact_number
+            ];
+
+            await client.query(insertQuery, insertValues);
+
+            // Increment section current_count
+            await client.query(`
+                UPDATE sections 
+                SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $1
+            `, [section]);
+
+            // Mark the enrollee as processed
+            await client.query(`
+                UPDATE early_registration 
+                SET assigned_section = $1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $2
+            `, [sectionData.section_name, earlyRegId]);
+
+            await client.query('COMMIT');
+            res.json({ 
+                success: true, 
+                message: `Student successfully assigned to ${sectionData.section_name}`
+            });
+        } else {
+            // Handle regular students table (unassigned students)
+            const studentId = parseInt(studentIdentifier);
+
+            // Get student details
+            const studentResult = await client.query(`
+                SELECT * FROM students WHERE id = $1 AND section_id IS NULL
+            `, [studentId]);
+
+            if (studentResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Unassigned student not found' });
+            }
+
+            // Verify section exists and has capacity
+            const sectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [section]);
+
+            if (sectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Section not found or inactive' });
+            }
+
+            const sectionData = sectionResult.rows[0];
+
+            if (sectionData.current_count >= sectionData.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+                });
+            }
+
+            // Assign student to section
+            await client.query(`
+                UPDATE students SET section_id = $1 WHERE id = $2
+            `, [section, studentId]);
+
+            // Increment section current_count
+            await client.query(`
+                UPDATE sections 
+                SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $1
+            `, [section]);
+
+            await client.query('COMMIT');
+            res.json({ 
+                success: true, 
+                message: `Student successfully assigned to ${sectionData.section_name}`
             });
         }
-
-        // 3. Check if this enrollee is already in students table
-        const existingStudent = await client.query(`
-            SELECT id FROM students WHERE enrollment_id = $1
-        `, [enrollmentId]);
-
-        if (existingStudent.rows.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ success: false, message: 'This enrollee has already been assigned to a section' });
-        }
-
-        // 4. Insert into students table
-        // Note: students table does not have registration_date/printed_name/signature_image_path columns.
-        // Map early_registration.registration_date to students.enrollment_date (set to CURRENT_DATE here).
-        const insertQuery = `
-            INSERT INTO students (
-                enrollment_id, section_id,
-                gmail_address, school_year, lrn, grade_level,
-                last_name, first_name, middle_name, ext_name,
-                birthday, age, sex, religion, current_address,
-                ip_community, ip_community_specify, pwd, pwd_specify,
-                father_name, mother_name, guardian_name, contact_number,
-                enrollment_date, enrollment_status, is_archived
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, CURRENT_DATE, 'active', true)
-            RETURNING id
-        `;
-
-        const insertValues = [
-            enrollmentId, section,
-            enrollee.gmail_address, enrollee.school_year, enrollee.lrn, enrollee.grade_level,
-            enrollee.last_name, enrollee.first_name, enrollee.middle_name, enrollee.ext_name,
-            enrollee.birthday, enrollee.age, enrollee.sex, enrollee.religion, enrollee.current_address,
-            enrollee.ip_community, enrollee.ip_community_specify, enrollee.pwd, enrollee.pwd_specify,
-            enrollee.father_name, enrollee.mother_name, enrollee.guardian_name, enrollee.contact_number
-        ];
-
-        const studentResult = await client.query(insertQuery, insertValues);
-
-        // 5. Increment section current_count
-        await client.query(`
-            UPDATE sections 
-            SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
-            WHERE id = $1
-        `, [section]);
-
-        // 6. Optionally mark the enrollee as processed (or delete from early_registration)
-        // For now, we'll keep it in early_registration but mark it with assigned_section
-        await client.query(`
-            UPDATE early_registration 
-            SET assigned_section = $1, updated_at = CURRENT_TIMESTAMP 
-            WHERE id = $2
-        `, [sectionData.section_name, enrollmentId]);
-
-        await client.query('COMMIT');
-        res.json({ 
-            success: true, 
-            message: `Student successfully assigned to ${sectionData.section_name}`,
-            student_id: studentResult.rows[0].id 
-        });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('Error assigning section:', err);
-        res.status(500).json({ success: false, message: 'Error assigning section: ' + err.message });
+        console.error('Error assigning student to section:', err);
+        res.status(500).json({ success: false, message: 'Error assigning student: ' + err.message });
     } finally {
         client.release();
     }
@@ -3969,7 +4262,7 @@ app.get('/sections/:id/view', async (req, res) => {
                 st.birthday,
                 st.religion,
                 st.current_address,
-                st.enrollment_date,
+                COALESCE(st.created_at, CURRENT_TIMESTAMP)::date as enrollment_date,
                 st.enrollment_status
             FROM students st
             WHERE st.section_id = $1 AND st.enrollment_status = 'active'
@@ -4018,7 +4311,7 @@ app.get('/api/sections/:id/students', async (req, res) => {
                 st.sex,
                 st.age,
                 st.contact_number,
-                st.enrollment_date,
+                COALESCE(st.created_at, CURRENT_TIMESTAMP)::date as enrollment_date,
                 st.enrollment_status
             FROM students st
             WHERE st.section_id = $1 AND st.enrollment_status = 'active'
@@ -4058,50 +4351,120 @@ app.put('/api/students/:id/reassign', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Get current student info
-        const studentResult = await client.query('SELECT section_id FROM students WHERE id = $1', [studentId]);
-        if (studentResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'Student not found' });
+        // Check if this is an early_registration student (ID starts with 'ER')
+        if (String(studentId).startsWith('ER')) {
+            // Extract the actual early_registration ID
+            const earlyRegId = parseInt(String(studentId).substring(2));
+
+            // Get early_registration details
+            const earlyRegResult = await client.query('SELECT * FROM early_registration WHERE id = $1', [earlyRegId]);
+            if (earlyRegResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Early registration record not found' });
+            }
+
+            const earlyReg = earlyRegResult.rows[0];
+
+            // Verify new section exists and has capacity
+            const newSectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [newSectionId]);
+
+            if (newSectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'New section not found or inactive' });
+            }
+
+            const newSection = newSectionResult.rows[0];
+
+            if (newSection.current_count >= newSection.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${newSection.section_name} is full (${newSection.current_count}/${newSection.max_capacity})` 
+                });
+            }
+
+            // Insert into students table from early_registration
+            await client.query(`
+                INSERT INTO students (
+                    lrn, school_year, grade_level, last_name, first_name, middle_name, ext_name,
+                    birthday, age, sex, religion, current_address, contact_number,
+                    enrollment_status, section_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ON CONFLICT DO NOTHING
+            `, [
+                earlyReg.lrn,
+                earlyReg.school_year,
+                earlyReg.grade_level,
+                earlyReg.last_name,
+                earlyReg.first_name,
+                earlyReg.middle_name || null,
+                earlyReg.ext_name || null,
+                earlyReg.birthday,
+                earlyReg.age,
+                earlyReg.sex,
+                earlyReg.religion || null,
+                earlyReg.current_address,
+                earlyReg.contact_number || null,
+                'active',
+                newSectionId
+            ]);
+
+            // Increment new section count
+            await client.query('UPDATE sections SET current_count = current_count + 1 WHERE id = $1', [newSectionId]);
+
+            await client.query('COMMIT');
+            res.json({ success: true, message: `Student enrolled and assigned to ${newSection.section_name}` });
+        } else {
+            // Handle regular students table
+            // Get current student info
+            const studentResult = await client.query('SELECT section_id FROM students WHERE id = $1', [studentId]);
+            if (studentResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Student not found' });
+            }
+
+            const oldSectionId = studentResult.rows[0].section_id;
+
+            // Verify new section exists and has capacity
+            const newSectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [newSectionId]);
+
+            if (newSectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'New section not found or inactive' });
+            }
+
+            const newSection = newSectionResult.rows[0];
+
+            if (newSection.current_count >= newSection.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${newSection.section_name} is full (${newSection.current_count}/${newSection.max_capacity})` 
+                });
+            }
+
+            // Update student's section
+            await client.query('UPDATE students SET section_id = $1 WHERE id = $2', [newSectionId, studentId]);
+
+            // Decrement old section count (if student had a section)
+            if (oldSectionId) {
+                await client.query('UPDATE sections SET current_count = current_count - 1 WHERE id = $1', [oldSectionId]);
+            }
+
+            // Increment new section count
+            await client.query('UPDATE sections SET current_count = current_count + 1 WHERE id = $1', [newSectionId]);
+
+            await client.query('COMMIT');
+            res.json({ success: true, message: `Student reassigned to ${newSection.section_name}` });
         }
-
-        const oldSectionId = studentResult.rows[0].section_id;
-
-        // Verify new section exists and has capacity
-        const newSectionResult = await client.query(`
-            SELECT id, section_name, max_capacity, current_count 
-            FROM sections 
-            WHERE id = $1 AND is_active = true
-        `, [newSectionId]);
-
-        if (newSectionResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'New section not found or inactive' });
-        }
-
-        const newSection = newSectionResult.rows[0];
-
-        if (newSection.current_count >= newSection.max_capacity) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                success: false, 
-                message: `Section ${newSection.section_name} is full (${newSection.current_count}/${newSection.max_capacity})` 
-            });
-        }
-
-        // Update student's section
-        await client.query('UPDATE students SET section_id = $1 WHERE id = $2', [newSectionId, studentId]);
-
-        // Decrement old section count (if student had a section)
-        if (oldSectionId) {
-            await client.query('UPDATE sections SET current_count = current_count - 1 WHERE id = $1', [oldSectionId]);
-        }
-
-        // Increment new section count
-        await client.query('UPDATE sections SET current_count = current_count + 1 WHERE id = $1', [newSectionId]);
-
-        await client.query('COMMIT');
-        res.json({ success: true, message: `Student reassigned to ${newSection.section_name}` });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error reassigning student:', err);
@@ -4154,14 +4517,15 @@ app.put('/api/students/:id/remove-section', async (req, res) => {
     }
 });
 
-// ICT Coordinator: Get unassigned students (students with section_id = NULL)
+// ICT Coordinator: Get unassigned students (students with section_id = NULL from students table OR newly approved from early_registration)
 app.get('/api/students/unassigned', async (req, res) => {
     if (!req.session.user || req.session.user.role !== 'ictcoor') {
         return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
     try {
-        const result = await pool.query(`
+        // Query 1: Get unassigned students from students table (section_id IS NULL)
+        const studentsResult = await pool.query(`
             SELECT 
                 st.id,
                 st.lrn,
@@ -4170,15 +4534,38 @@ app.get('/api/students/unassigned', async (req, res) => {
                 st.sex,
                 st.age,
                 st.contact_number,
-                st.enrollment_date,
-                st.enrollment_status
+                COALESCE(st.created_at, CURRENT_TIMESTAMP)::date as enrollment_date,
+                st.enrollment_status,
+                'students' as source
             FROM students st
             WHERE st.section_id IS NULL 
               AND st.enrollment_status = 'active'
             ORDER BY st.grade_level, st.last_name, st.first_name
         `);
 
-        res.json(result.rows);
+        // Query 2: Get newly approved students from early_registration (not yet added to students table)
+        const earlyRegResult = await pool.query(`
+            SELECT 
+                'ER' || er.id as id,
+                er.lrn,
+                CONCAT(er.last_name, ', ', er.first_name, ' ', COALESCE(er.middle_name, ''), ' ', COALESCE(er.ext_name, '')) as full_name,
+                er.grade_level,
+                er.sex,
+                er.age,
+                er.contact_number,
+                er.registration_date as enrollment_date,
+                'active' as enrollment_status,
+                'early_registration' as source
+            FROM early_registration er
+            LEFT JOIN students st ON st.lrn = er.lrn AND st.school_year = er.school_year
+            WHERE st.id IS NULL
+            ORDER BY er.grade_level, er.last_name, er.first_name
+        `);
+
+        // Combine results: students first, then early_registration
+        const combinedResults = [...studentsResult.rows, ...earlyRegResult.rows];
+
+        res.json(combinedResults);
     } catch (err) {
         console.error('Error fetching unassigned students:', err);
         res.status(500).json({ success: false, message: 'Error fetching unassigned students' });
@@ -4299,7 +4686,7 @@ app.get('/api/students/archived', async (req, res) => {
                 s.sex,
                 s.contact_number,
                 sec.section_name as assigned_section,
-                s.enrollment_date
+                COALESCE(s.created_at, CURRENT_TIMESTAMP)::date as enrollment_date
             FROM students s
             LEFT JOIN sections sec ON s.section_id = sec.id
             WHERE s.is_archived = true
@@ -4336,7 +4723,7 @@ app.get('/api/students/all', async (req, res) => {
                 s.sex,
                 s.contact_number,
                 sec.section_name as assigned_section,
-                s.enrollment_date,
+                COALESCE(s.created_at, CURRENT_TIMESTAMP)::date as enrollment_date,
                 s.enrollment_status,
                 COALESCE(s.is_archived, false) as is_archived
             FROM students s
@@ -4360,7 +4747,7 @@ app.get('/api/students/all', async (req, res) => {
         // Also get enrollees who haven't been assigned yet (pending)
         const enrolleesResult = await pool.query(`
             SELECT 
-                er.id,
+                'ER' || er.id::text as id,
                 er.id as enrollment_id,
                 er.lrn,
                 er.grade_level,
@@ -4372,13 +4759,13 @@ app.get('/api/students/all', async (req, res) => {
                 er.age,
                 er.sex,
                 er.contact_number,
-                er.assigned_section,
+                NULL as assigned_section,
                 er.created_at as enrollment_date,
                 'pending' as enrollment_status,
                 false as is_archived
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::text
             )
             ORDER BY 
                 CASE 
@@ -4411,9 +4798,57 @@ app.get('/api/student/:id', async (req, res) => {
         return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const studentId = req.params.id;
+    let studentId = req.params.id;
     try {
-        // First try to get from students table (assigned students)
+        // Check if this is an early_registration student (ID starts with 'ER')
+        if (String(studentId).startsWith('ER')) {
+            // Extract the numeric ID from the ER prefix
+            const erNumericId = parseInt(String(studentId).substring(2));
+            
+            // Query early_registration table
+            const result = await pool.query(`
+                SELECT 
+                    $1 as id,
+                    gmail_address,
+                    school_year,
+                    lrn,
+                    grade_level,
+                    last_name,
+                    first_name,
+                    middle_name,
+                    ext_name,
+                    CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''), ' ', COALESCE(ext_name, '')) AS full_name,
+                    birthday,
+                    age,
+                    sex,
+                    religion,
+                    current_address,
+                    ip_community,
+                    ip_community_specify,
+                    pwd,
+                    pwd_specify,
+                    father_name,
+                    mother_name,
+                    guardian_name,
+                    contact_number,
+                    registration_date as enrollment_date,
+                    printed_name,
+                    NULL as assigned_section,
+                    signature_image_path,
+                    created_at,
+                    updated_at
+                FROM early_registration
+                WHERE id = $2
+            `, [studentId, erNumericId]);
+            
+            if (result.rows.length === 0) {
+                return res.status(404).json({ success: false, message: 'Early registration student not found' });
+            }
+            
+            return res.json(result.rows[0]);
+        }
+        
+        // For regular students, query students table
         let result = await pool.query(`
             SELECT 
                 id,
@@ -4445,44 +4880,6 @@ app.get('/api/student/:id', async (req, res) => {
             FROM students
             WHERE id = $1
         `, [studentId]);
-
-        // If not found in students table, try early_registration (enrollees)
-        if (result.rows.length === 0) {
-            result = await pool.query(`
-                SELECT 
-                    id,
-                    gmail_address,
-                    school_year,
-                    lrn,
-                    grade_level,
-                    last_name,
-                    first_name,
-                    middle_name,
-                    ext_name,
-                    CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''), ' ', COALESCE(ext_name, '')) AS full_name,
-                    birthday,
-                    age,
-                    sex,
-                    religion,
-                    current_address,
-                    ip_community,
-                    ip_community_specify,
-                    pwd,
-                    pwd_specify,
-                    father_name,
-                    mother_name,
-                    guardian_name,
-                    contact_number,
-                    registration_date,
-                    printed_name,
-                    assigned_section,
-                    signature_image_path,
-                    created_at,
-                    updated_at
-                FROM early_registration
-                WHERE id = $1
-            `, [studentId]);
-        }
 
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Student not found' });
@@ -5155,10 +5552,10 @@ app.get('/api/dashboard/summary', async (req, res) => {
 
         // Enrollment trend by month (this year)
         const enrollTrend = await pool.query(`
-            SELECT TO_CHAR(date_trunc('month', st.enrollment_date), 'YYYY-MM') AS ym,
+            SELECT TO_CHAR(date_trunc('month', st.created_at), 'YYYY-MM') AS ym,
                    COUNT(*)::int AS count
             FROM students st
-            WHERE st.enrollment_date >= date_trunc('year', CURRENT_DATE)
+            WHERE st.created_at >= date_trunc('year', CURRENT_DATE)
             GROUP BY ym
             ORDER BY ym
         `);
@@ -5485,24 +5882,8 @@ async function ensureMessagingSchema() {
     }
 }
 
-// Call ensureMessagingSchema on startup (non-blocking)
-ensureMessagingSchema().catch(e => console.error('messaging schema init error', e.message));
-
-// Ensure teachers table has is_archived column (for soft-delete/archive)
-async function ensureTeachersArchiveColumn() {
-    try {
-        // Add column if missing
-        await pool.query(`ALTER TABLE teachers ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false`);
-        // Create index for faster queries
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_teachers_is_archived ON teachers(is_archived)`);
-        console.log('✅ ensureTeachersArchiveColumn OK');
-    } catch (err) {
-        console.error('❌ ensureTeachersArchiveColumn failed:', err && err.message ? err.message : err);
-    }
-}
-
-// Call on startup (non-blocking)
-ensureTeachersArchiveColumn().catch(e => console.error('teachers is_archived init error', e && e.message ? e.message : e));
+// All schema initialization is now handled by initializeSchemas() function
+// (called automatically after database connection is established)
 
 // Archive a sent message (soft-delete)
 app.post('/api/guidance/messages/:id/archive', async (req, res) => {
@@ -6002,6 +6383,4 @@ app.post('/api/test-email', async (req, res) => {
 // Start the server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    // Initialize schemas after server starts
-    initializeSchemas();
 });

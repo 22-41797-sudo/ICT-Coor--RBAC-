@@ -244,16 +244,6 @@
           </div>
 
           <div class="form-group">
-            <label for="reportSeverity">Severity Level:</label>
-            <select id="reportSeverity" required>
-              <option value="">Select Severity</option>
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-            </select>
-          </div>
-
-          <div class="form-group">
             <label for="reportNotes">Detailed Notes:</label>
             <textarea id="reportNotes" rows="4" placeholder="Provide details about the incident or behavior..." class="textarea-input"></textarea>
           </div>
@@ -418,8 +408,14 @@
     }
 
     function renderSectionReports() {
+      console.log('renderSectionReports called');
       const tbody = document.querySelector('#sectionReportsTable tbody');
+      
+      // Always clear existing rows first
+      tbody.innerHTML = '';
+      
       if (!allReports || allReports.length === 0) {
+        console.log('No reports available');
         tbody.innerHTML = '<tr><td colspan="5">No reports for this section yet.</td></tr>';
         return;
       }
@@ -428,6 +424,8 @@
       const toRaw = parseDateOnly(document.getElementById('reportsTo')?.value);
       let to = toRaw;
       if (to) { to.setHours(23,59,59,999); }
+      
+      console.log('Filter values:', { search, from, to, allReportsCount: allReports.length });
 
       const filtered = allReports.filter(r => {
         if (search) {
@@ -444,11 +442,12 @@
         return true;
       });
 
+      console.log('Filtered results:', filtered.length);
       if (!filtered || filtered.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5">No reports match the filter.</td></tr>';
         return;
       }
-      tbody.innerHTML = '';
+      
       filtered.forEach(r => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -736,11 +735,10 @@
       if (!currentStudent || !currentSectionId) return;
       
       const category = document.getElementById('reportCategory').value;
-      const severity = document.getElementById('reportSeverity').value;
       const notes = document.getElementById('reportNotes').value;
       
-      if (!category || !severity) {
-        showToast('Please fill in all required fields', 'warn');
+      if (!category) {
+        showToast('Please select a behavior category', 'warn');
         return;
       }
       
@@ -748,11 +746,11 @@
         const res = await fetch('/api/behavior-reports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ studentId: currentStudent.id, sectionId: currentSectionId, category, severity, notes })
+          body: JSON.stringify({ studentId: currentStudent.id, sectionId: currentSectionId, category, notes })
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed');
-        showToast('Report submitted successfully', 'success');
+        showToast('Report submitted successfully - Severity calculated automatically', 'success');
         closeReportModal();
         await loadStudentReports();
         await loadSectionReports();
@@ -834,34 +832,77 @@
     setInterval(updateUnreadCount, 120000);
 
     // Wire up filters (guard with optional chaining)
-    document.getElementById('studentsSearch')?.addEventListener('input', renderStudents);
-    document.getElementById('studentsReset')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      document.getElementById('studentsSearch').value = '';
-      renderStudents();
-    });
+    const setupEventListeners = () => {
+      const studentsReset = document.getElementById('studentsReset');
+      const reportsReset = document.getElementById('reportsReset');
+      const messagesReset = document.getElementById('messagesReset');
+      
+      console.log('Setting up event listeners...', { studentsReset, reportsReset, messagesReset });
+      
+      document.getElementById('studentsSearch')?.addEventListener('input', renderStudents);
+      if (studentsReset) {
+        studentsReset.addEventListener('click', function(e) {
+          console.log('Students reset clicked');
+          e.preventDefault();
+          e.stopPropagation();
+          document.getElementById('studentsSearch').value = '';
+          renderStudents();
+          return false;
+        });
+      }
 
-    document.getElementById('reportsSearch')?.addEventListener('input', renderSectionReports);
-    document.getElementById('reportsFrom')?.addEventListener('change', renderSectionReports);
-    document.getElementById('reportsTo')?.addEventListener('change', renderSectionReports);
-    document.getElementById('reportsReset')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      document.getElementById('reportsSearch').value = '';
-      document.getElementById('reportsFrom').value = '';
-      document.getElementById('reportsTo').value = '';
-      renderSectionReports();
-    });
+      document.getElementById('reportsSearch')?.addEventListener('input', renderSectionReports);
+      document.getElementById('reportsFrom')?.addEventListener('change', renderSectionReports);
+      document.getElementById('reportsTo')?.addEventListener('change', renderSectionReports);
+      if (reportsReset) {
+        reportsReset.addEventListener('click', function(e) {
+          console.log('Reports reset clicked - CLEARING TABLE');
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Clear all filter fields
+          const searchField = document.getElementById('reportsSearch');
+          const fromField = document.getElementById('reportsFrom');
+          const toField = document.getElementById('reportsTo');
+          
+          if (searchField) searchField.value = '';
+          if (fromField) fromField.value = '';
+          if (toField) toField.value = '';
+          
+          // Clear the table completely
+          const tbody = document.querySelector('#sectionReportsTable tbody');
+          tbody.innerHTML = '<tr><td colspan="5">Loading...</td></tr>';
+          console.log('Table cleared, reloading all data');
+          
+          // Reload all section reports
+          loadSectionReports();
+          
+          return false;
+        });
+      }
 
-    document.getElementById('messagesSearch')?.addEventListener('input', renderMessages);
-    document.getElementById('messagesFrom')?.addEventListener('change', renderMessages);
-    document.getElementById('messagesTo')?.addEventListener('change', renderMessages);
-    document.getElementById('messagesReset')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      document.getElementById('messagesSearch').value = '';
-      document.getElementById('messagesFrom').value = '';
-      document.getElementById('messagesTo').value = '';
-      renderMessages();
-    });
+      document.getElementById('messagesSearch')?.addEventListener('input', renderMessages);
+      document.getElementById('messagesFrom')?.addEventListener('change', renderMessages);
+      document.getElementById('messagesTo')?.addEventListener('change', renderMessages);
+      if (messagesReset) {
+        messagesReset.addEventListener('click', function(e) {
+          console.log('Messages reset clicked');
+          e.preventDefault();
+          e.stopPropagation();
+          document.getElementById('messagesSearch').value = '';
+          document.getElementById('messagesFrom').value = '';
+          document.getElementById('messagesTo').value = '';
+          renderMessages();
+          return false;
+        });
+      }
+    };
+    
+    // Call setup immediately and on DOM ready
+    setupEventListeners();
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setupEventListeners);
+    }
   </script>
   <script src="/guidance-toast.js"></script>
 </body>
