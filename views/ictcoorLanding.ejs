@@ -3098,7 +3098,7 @@ q<!DOCTYPE html>
                                 <td>${student.contact_number || '-'}</td>
                                 <td>${enrollmentDate}</td>
                                 <td class="table-actions">
-                                    <button class="action-btn action-edit" title="Assign to section" onclick="assignUnassignedStudent(${student.id}, '${student.full_name}')">
+                                    <button class="action-btn action-edit" title="Assign to section" data-student-id="${student.id}" data-student-name="${student.full_name}" onclick="assignUnassignedStudent(this.dataset.studentId, this.dataset.studentName)">
                                         <i class="fas fa-user-plus"></i> Assign
                                     </button>
                                 </td>
