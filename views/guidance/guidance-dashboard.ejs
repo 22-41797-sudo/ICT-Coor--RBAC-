@@ -470,7 +470,95 @@
             border: 1px solid #FECACA;
         }
 
-        @media (max-width: 1024px) {
+        /* Insights Section */
+        .insights-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .insight-card {
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--gray-100);
+            padding: 24px;
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s ease;
+        }
+
+        .insight-card:hover {
+            box-shadow: var(--shadow-lg);
+            transform: translateY(-2px);
+        }
+
+        .insight-primary {
+            border-left: 4px solid var(--primary-red);
+        }
+
+        .insight-warning {
+            border-left: 4px solid #F59E0B;
+        }
+
+        .insight-success {
+            border-left: 4px solid #10B981;
+        }
+
+        .insight-header {
+            margin-bottom: 16px;
+        }
+
+        .insight-header h3 {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin: 0;
+        }
+
+        .insight-content {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .insight-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .insight-label {
+            font-size: 13px;
+            color: var(--gray-600);
+            font-weight: 600;
+        }
+
+        .insight-value {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--primary-red);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--gray-200);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-red) 0%, var(--accent-red) 100%);
+            transition: width 0.3s ease;
+        }
+
+        .insight-text {
+            font-size: 13px;
+            color: var(--gray-600);
+            margin: 0;
+            line-height: 1.5;
+        }
             .sidebar {
                 width: 250px;
             }
@@ -603,24 +691,75 @@
 
             <div class="stats-grid">
                 <div class="stat-card">
-                    <h3>Total Requests</h3>
+                    <h3>📨 Total Requests</h3>
                     <div class="number"><%= typeof totalRequests !== 'undefined' ? totalRequests : (requests && requests.length) || 0 %></div>
-                    <div class="trend">All time</div>
+                    <div class="trend">All time submissions</div>
                 </div>
                 <div class="stat-card">
-                    <h3>Pending</h3>
+                    <h3>⏳ Pending Review</h3>
                     <div class="number"><%= typeof pendingRequests !== 'undefined' ? pendingRequests : 0 %></div>
-                    <div class="trend">Awaiting action</div>
+                    <div class="trend">Needs your attention</div>
                 </div>
                 <div class="stat-card">
-                    <h3>Approved</h3>
+                    <h3>✅ Approved</h3>
                     <div class="number"><%= typeof approvedRequests !== 'undefined' ? approvedRequests : 0 %></div>
                     <div class="trend">Ready for fulfillment</div>
                 </div>
                 <div class="stat-card">
-                    <h3>Completed</h3>
+                    <h3>✨ Completed</h3>
                     <div class="number"><%= typeof completedRequests !== 'undefined' ? completedRequests : 0 %></div>
-                    <div class="trend">Fulfilled</div>
+                    <div class="trend">Successfully fulfilled</div>
+                </div>
+            </div>
+
+            <!-- Quick Insights Section -->
+            <div class="insights-container">
+                <div class="insight-card insight-primary">
+                    <div class="insight-header">
+                        <h3>📊 Processing Overview</h3>
+                    </div>
+                    <div class="insight-content">
+                        <% var totalDone = (approvedRequests || 0) + (completedRequests || 0); var processRate = totalRequests > 0 ? Math.round((totalDone / totalRequests) * 100) : 0; %>
+                        <div class="insight-stat">
+                            <span class="insight-label">Completion Rate</span>
+                            <span class="insight-value"><%= processRate %>%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: <%= processRate %>%"></div>
+                        </div>
+                        <p class="insight-text">You've processed <%= totalDone %> out of <%= totalRequests %> total requests</p>
+                    </div>
+                </div>
+
+                <div class="insight-card insight-warning">
+                    <div class="insight-header">
+                        <h3>⚡ Action Required</h3>
+                    </div>
+                    <div class="insight-content">
+                        <% var pendingPct = totalRequests > 0 ? Math.round(((pendingRequests || 0) / totalRequests) * 100) : 0; %>
+                        <div class="insight-stat">
+                            <span class="insight-label">Pending Requests</span>
+                            <span class="insight-value" style="color: #F59E0B;"><%= pendingPct %>%</span>
+                        </div>
+                        <p class="insight-text"><%= pendingRequests || 0 %> document request<%= (pendingRequests === 1 ? '' : 's') %> awaiting your review and approval</p>
+                    </div>
+                </div>
+
+                <div class="insight-card insight-success">
+                    <div class="insight-header">
+                        <h3>🎯 Performance Tip</h3>
+                    </div>
+                    <div class="insight-content">
+                        <p class="insight-text">
+                            <% if (pendingRequests > 5) { %>
+                                You have a growing backlog. Consider prioritizing urgent requests first.
+                            <% } else if (pendingRequests > 0) { %>
+                                Great progress! Keep reviewing pending requests to maintain momentum.
+                            <% } else { %>
+                                Excellent! All requests are processed. Keep up the great work!
+                            <% } %>
+                        </p>
+                    </div>
                 </div>
             </div>
 

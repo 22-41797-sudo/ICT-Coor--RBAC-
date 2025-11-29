@@ -1883,17 +1883,43 @@ app.get('/registrar', async (req, res) => {
             ORDER BY reviewed_at DESC
         `);
         
+        // Calculate metrics for insights
+        const totalRequests = requestsResult.rows.length;
+        const approvedCount = requestsResult.rows.filter(r => r.status === 'approved').length;
+        const rejectedCount = requestsResult.rows.filter(r => r.status === 'rejected').length;
+        const pendingCount = requestsResult.rows.filter(r => r.status === 'pending').length;
+        
+        // Count today's requests
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayRequests = requestsResult.rows.filter(r => {
+            const requestDate = new Date(r.date_submitted);
+            requestDate.setHours(0, 0, 0, 0);
+            return requestDate.getTime() === today.getTime();
+        }).length;
+        
         res.render('registrarDashboard', { 
             registrations: result.rows,
             requests: requestsResult.rows,
-            history: historyResult.rows
+            history: historyResult.rows,
+            // Insights metrics
+            totalRequests: totalRequests,
+            approvedCount: approvedCount,
+            rejectedCount: rejectedCount,
+            pendingCount: pendingCount,
+            todayRequests: todayRequests
         });
     } catch (err) {
         console.error('Error fetching registrations:', err);
         res.render('registrarDashboard', { 
             registrations: [],
             requests: [],
-            history: []
+            history: [],
+            totalRequests: 0,
+            approvedCount: 0,
+            rejectedCount: 0,
+            pendingCount: 0,
+            todayRequests: 0
         });
     }
 });

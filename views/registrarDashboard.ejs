@@ -373,6 +373,164 @@
             border: 1px solid #fecaca;
         }
 
+        /* Insights Section for Registrar */
+        .insights-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 32px 0;
+        }
+
+        .insight-box {
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--gray-100);
+            padding: 24px;
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s ease;
+        }
+
+        .insight-box:hover {
+            box-shadow: var(--shadow-lg);
+            transform: translateY(-2px);
+        }
+
+        .insight-box.insight-primary {
+            border-left: 4px solid var(--primary-red);
+        }
+
+        .insight-box.insight-warning {
+            border-left: 4px solid #F59E0B;
+        }
+
+        .insight-box.insight-success {
+            border-left: 4px solid #10B981;
+        }
+
+        .insight-box.insight-info {
+            border-left: 4px solid #3B82F6;
+        }
+
+        .insight-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: 12px;
+        }
+
+        .insight-metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .insight-label {
+            font-size: 13px;
+            color: var(--gray-600);
+            font-weight: 500;
+        }
+
+        .insight-number {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--primary-red);
+        }
+
+        .insight-description {
+            font-size: 13px;
+            color: var(--gray-600);
+            line-height: 1.5;
+        }
+
+        .stat-progress-bar {
+            width: 100%;
+            height: 6px;
+            background: var(--gray-200);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .stat-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-red) 0%, var(--accent-red) 100%);
+            transition: width 0.3s ease;
+        }
+
+        @media (max-width: 1024px) {
+            main {
+                margin-left: 250px;
+                padding: 24px 24px;
+            }
+
+            .page-wrap {
+                padding: 24px;
+            }
+
+            .grid {
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 16px;
+            }
+
+            .insights-grid {
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 16px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 200px;
+                padding: 16px;
+                gap: 12px;
+            }
+
+            main {
+                margin-left: 200px;
+                padding: 16px 16px;
+            }
+
+            .page-wrap {
+                padding: 16px;
+                border-radius: 12px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            .insights-grid {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            .card-stat {
+                padding: 20px;
+                min-height: 120px;
+            }
+
+            .stat-value {
+                font-size: 28px;
+            }
+
+            .form-section {
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+
+            .table-section {
+                border-radius: 8px;
+            }
+
+            .table th,
+            .table td {
+                padding: 12px;
+                font-size: 13px;
+            }
+        }
+
         @media (max-width: 1024px) {
             main {
                 margin-left: 250px;
@@ -604,6 +762,69 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Insights Section -->
+            <div class="insights-grid">
+                <!-- Efficiency Insight -->
+                <div class="insight-box insight-primary">
+                    <div class="insight-title">📊 Processing Efficiency</div>
+                    <% var approvalRate = totalRequests > 0 ? Math.round((approvedCount / totalRequests) * 100) : 0; %>
+                    <div class="insight-metric">
+                        <span class="insight-label">Approval Rate</span>
+                        <span class="insight-number"><%= approvalRate %>%</span>
+                    </div>
+                    <div class="stat-progress-bar">
+                        <div class="stat-progress-fill" style="width: <%= approvalRate %>%"></div>
+                    </div>
+                    <p class="insight-description" style="margin-top: 12px;">
+                        <%= approvedCount %> requests approved out of <%= totalRequests %> total submissions
+                    </p>
+                </div>
+
+                <!-- Pending Workload -->
+                <div class="insight-box insight-warning">
+                    <div class="insight-title">⏳ Pending Workload</div>
+                    <div class="insight-metric">
+                        <span class="insight-label">Awaiting Review</span>
+                        <span class="insight-number" style="color: #F59E0B;"><%= pendingCount %></span>
+                    </div>
+                    <p class="insight-description" style="margin-top: 12px;">
+                        <% if (pendingCount > 10) { %>
+                            High workload detected. Consider expediting reviews.
+                        <% } else if (pendingCount > 5) { %>
+                            Moderate workload. Keep up the pace!
+                        <% } else if (pendingCount > 0) { %>
+                            Low workload. Nearly caught up!
+                        <% } else { %>
+                            All caught up! No pending requests.
+                        <% } %>
+                    </p>
+                </div>
+
+                <!-- Status Overview -->
+                <div class="insight-box insight-success">
+                    <div class="insight-title">✅ Success Rate</div>
+                    <div class="insight-metric">
+                        <span class="insight-label">Completed</span>
+                        <span class="insight-number" style="color: #10B981;"><%= approvedCount %></span>
+                    </div>
+                    <p class="insight-description" style="margin-top: 12px;">
+                        <%= rejectedCount %> rejected | <%= totalRequests - pendingCount - rejectedCount %> processed
+                    </p>
+                </div>
+
+                <!-- Today's Activity -->
+                <div class="insight-box insight-info">
+                    <div class="insight-title">📅 Today's Activity</div>
+                    <div class="insight-metric">
+                        <span class="insight-label">New Submissions</span>
+                        <span class="insight-number" style="color: #3B82F6;"><%= todayRequests %></span>
+                    </div>
+                    <p class="insight-description" style="margin-top: 12px;">
+                        <%= todayRequests %> new request<%= (todayRequests === 1 ? '' : 's') %> submitted today
+                    </p>
                 </div>
             </div>
         </div>
