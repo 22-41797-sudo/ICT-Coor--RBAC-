@@ -3422,108 +3422,164 @@ app.post('/assign-section/:id', async (req, res) => {
         return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const enrollmentId = req.params.id;
-    const { section } = req.body; // This will now be section_id from the frontend
+    const studentIdentifier = req.params.id;
+    const { section } = req.body;
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // 1. Get the enrollee data from early_registration
-        const enrolleeResult = await client.query(`
-            SELECT * FROM early_registration WHERE id = $1
-        `, [enrollmentId]);
+        // Check if this is an early_registration student (ID starts with 'ER')
+        if (String(studentIdentifier).startsWith('ER')) {
+            // Extract the actual early_registration ID
+            const earlyRegId = parseInt(String(studentIdentifier).substring(2));
 
-        if (enrolleeResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'Enrollee not found' });
-        }
+            // Get early_registration details
+            const enrolleeResult = await client.query(`
+                SELECT * FROM early_registration WHERE id = $1
+            `, [earlyRegId]);
 
-        const enrollee = enrolleeResult.rows[0];
+            if (enrolleeResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Enrollee not found' });
+            }
 
-        // 2. Verify section exists and has capacity
-        const sectionResult = await client.query(`
-            SELECT id, section_name, max_capacity, current_count 
-            FROM sections 
-            WHERE id = $1 AND is_active = true
-        `, [section]);
+            const enrollee = enrolleeResult.rows[0];
 
-        if (sectionResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: 'Section not found or inactive' });
-        }
+            // Verify section exists and has capacity
+            const sectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [section]);
 
-        const sectionData = sectionResult.rows[0];
+            if (sectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Section not found or inactive' });
+            }
 
-        if (sectionData.current_count >= sectionData.max_capacity) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                success: false, 
-                message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+            const sectionData = sectionResult.rows[0];
+
+            if (sectionData.current_count >= sectionData.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+                });
+            }
+
+            // Check if this enrollee is already in students table
+            const existingStudent = await client.query(`
+                SELECT id FROM students WHERE enrollment_id = $1
+            `, [earlyRegId]);
+
+            if (existingStudent.rows.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'This enrollee has already been assigned to a section' });
+            }
+
+            // Insert into students table
+            const insertQuery = `
+                INSERT INTO students (
+                    enrollment_id, section_id,
+                    gmail_address, school_year, lrn, grade_level,
+                    last_name, first_name, middle_name, ext_name,
+                    birthday, age, sex, religion, current_address,
+                    ip_community, ip_community_specify, pwd, pwd_specify,
+                    father_name, mother_name, guardian_name, contact_number,
+                    enrollment_status, is_archived
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'active', false)
+                RETURNING id
+            `;
+
+            const insertValues = [
+                earlyRegId, section,
+                enrollee.gmail_address, enrollee.school_year, enrollee.lrn, enrollee.grade_level,
+                enrollee.last_name, enrollee.first_name, enrollee.middle_name, enrollee.ext_name,
+                enrollee.birthday, enrollee.age, enrollee.sex, enrollee.religion, enrollee.current_address,
+                enrollee.ip_community, enrollee.ip_community_specify, enrollee.pwd, enrollee.pwd_specify,
+                enrollee.father_name, enrollee.mother_name, enrollee.guardian_name, enrollee.contact_number
+            ];
+
+            await client.query(insertQuery, insertValues);
+
+            // Increment section current_count
+            await client.query(`
+                UPDATE sections 
+                SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $1
+            `, [section]);
+
+            // Mark the enrollee as processed
+            await client.query(`
+                UPDATE early_registration 
+                SET assigned_section = $1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $2
+            `, [sectionData.section_name, earlyRegId]);
+
+            await client.query('COMMIT');
+            res.json({ 
+                success: true, 
+                message: `Student successfully assigned to ${sectionData.section_name}`
+            });
+        } else {
+            // Handle regular students table (unassigned students)
+            const studentId = parseInt(studentIdentifier);
+
+            // Get student details
+            const studentResult = await client.query(`
+                SELECT * FROM students WHERE id = $1 AND section_id IS NULL
+            `, [studentId]);
+
+            if (studentResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Unassigned student not found' });
+            }
+
+            // Verify section exists and has capacity
+            const sectionResult = await client.query(`
+                SELECT id, section_name, max_capacity, current_count 
+                FROM sections 
+                WHERE id = $1 AND is_active = true
+            `, [section]);
+
+            if (sectionResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Section not found or inactive' });
+            }
+
+            const sectionData = sectionResult.rows[0];
+
+            if (sectionData.current_count >= sectionData.max_capacity) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Section ${sectionData.section_name} is full (${sectionData.current_count}/${sectionData.max_capacity})` 
+                });
+            }
+
+            // Assign student to section
+            await client.query(`
+                UPDATE students SET section_id = $1 WHERE id = $2
+            `, [section, studentId]);
+
+            // Increment section current_count
+            await client.query(`
+                UPDATE sections 
+                SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = $1
+            `, [section]);
+
+            await client.query('COMMIT');
+            res.json({ 
+                success: true, 
+                message: `Student successfully assigned to ${sectionData.section_name}`
             });
         }
-
-        // 3. Check if this enrollee is already in students table
-        const existingStudent = await client.query(`
-            SELECT id FROM students WHERE enrollment_id = $1
-        `, [enrollmentId]);
-
-        if (existingStudent.rows.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ success: false, message: 'This enrollee has already been assigned to a section' });
-        }
-
-        // 4. Insert into students table
-        // Note: students table does not have registration_date/printed_name/signature_image_path columns.
-        const insertQuery = `
-            INSERT INTO students (
-                enrollment_id, section_id,
-                gmail_address, school_year, lrn, grade_level,
-                last_name, first_name, middle_name, ext_name,
-                birthday, age, sex, religion, current_address,
-                ip_community, ip_community_specify, pwd, pwd_specify,
-                father_name, mother_name, guardian_name, contact_number,
-                enrollment_status, is_archived
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'active', false)
-            RETURNING id
-        `;
-
-        const insertValues = [
-            enrollmentId, section,
-            enrollee.gmail_address, enrollee.school_year, enrollee.lrn, enrollee.grade_level,
-            enrollee.last_name, enrollee.first_name, enrollee.middle_name, enrollee.ext_name,
-            enrollee.birthday, enrollee.age, enrollee.sex, enrollee.religion, enrollee.current_address,
-            enrollee.ip_community, enrollee.ip_community_specify, enrollee.pwd, enrollee.pwd_specify,
-            enrollee.father_name, enrollee.mother_name, enrollee.guardian_name, enrollee.contact_number
-        ];
-
-        const studentResult = await client.query(insertQuery, insertValues);
-
-        // 5. Increment section current_count
-        await client.query(`
-            UPDATE sections 
-            SET current_count = current_count + 1, updated_at = CURRENT_TIMESTAMP 
-            WHERE id = $1
-        `, [section]);
-
-        // 6. Optionally mark the enrollee as processed (or delete from early_registration)
-        // For now, we'll keep it in early_registration but mark it with assigned_section
-        await client.query(`
-            UPDATE early_registration 
-            SET assigned_section = $1, updated_at = CURRENT_TIMESTAMP 
-            WHERE id = $2
-        `, [sectionData.section_name, enrollmentId]);
-
-        await client.query('COMMIT');
-        res.json({ 
-            success: true, 
-            message: `Student successfully assigned to ${sectionData.section_name}`,
-            student_id: studentResult.rows[0].id 
-        });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('Error assigning section:', err);
-        res.status(500).json({ success: false, message: 'Error assigning section: ' + err.message });
+        console.error('Error assigning student to section:', err);
+        res.status(500).json({ success: false, message: 'Error assigning student: ' + err.message });
     } finally {
         client.release();
     }
