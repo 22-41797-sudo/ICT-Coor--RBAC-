@@ -244,16 +244,6 @@
           </div>
 
           <div class="form-group">
-            <label for="reportSeverity">Severity Level:</label>
-            <select id="reportSeverity" required>
-              <option value="">Select Severity</option>
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-            </select>
-          </div>
-
-          <div class="form-group">
             <label for="reportNotes">Detailed Notes:</label>
             <textarea id="reportNotes" rows="4" placeholder="Provide details about the incident or behavior..." class="textarea-input"></textarea>
           </div>
@@ -736,11 +726,10 @@
       if (!currentStudent || !currentSectionId) return;
       
       const category = document.getElementById('reportCategory').value;
-      const severity = document.getElementById('reportSeverity').value;
       const notes = document.getElementById('reportNotes').value;
       
-      if (!category || !severity) {
-        showToast('Please fill in all required fields', 'warn');
+      if (!category) {
+        showToast('Please select a behavior category', 'warn');
         return;
       }
       
@@ -748,11 +737,11 @@
         const res = await fetch('/api/behavior-reports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ studentId: currentStudent.id, sectionId: currentSectionId, category, severity, notes })
+          body: JSON.stringify({ studentId: currentStudent.id, sectionId: currentSectionId, category, notes })
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed');
-        showToast('Report submitted successfully', 'success');
+        showToast('Report submitted successfully - Severity calculated automatically', 'success');
         closeReportModal();
         await loadStudentReports();
         await loadSectionReports();
@@ -837,6 +826,7 @@
     document.getElementById('studentsSearch')?.addEventListener('input', renderStudents);
     document.getElementById('studentsReset')?.addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       document.getElementById('studentsSearch').value = '';
       renderStudents();
     });
@@ -846,6 +836,7 @@
     document.getElementById('reportsTo')?.addEventListener('change', renderSectionReports);
     document.getElementById('reportsReset')?.addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       document.getElementById('reportsSearch').value = '';
       document.getElementById('reportsFrom').value = '';
       document.getElementById('reportsTo').value = '';
@@ -857,6 +848,7 @@
     document.getElementById('messagesTo')?.addEventListener('change', renderMessages);
     document.getElementById('messagesReset')?.addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       document.getElementById('messagesSearch').value = '';
       document.getElementById('messagesFrom').value = '';
       document.getElementById('messagesTo').value = '';

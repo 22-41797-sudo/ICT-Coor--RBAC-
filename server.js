@@ -551,10 +551,90 @@ app.get('/api/teacher/students/:id', requireTeacher, async (req, res) => {
     }
 });
 
+// Auto-calculate severity based on category, notes content, and report history
+function calculateSeverity(category, notes, priorReportCount) {
+    // High-risk keywords that escalate severity
+    const highRiskKeywords = ['weapon', 'knife', 'gun', 'injured', 'blood', 'assault', 'hit', 'punch', 'kick', 'stab', 'sexual', 'abuse', 'death', 'kill', 'suicide', 'bomb', 'threat'];
+    const mediumRiskKeywords = ['fight', 'hurt', 'pain', 'emergency', 'police', 'hospital', 'broken', 'severe', 'serious', 'dangerous'];
+    const lowRiskKeywords = ['late', 'absent', 'incomplete', 'forgotten', 'minor', 'small', 'talk', 'chat', 'whisper', 'distract'];
+    
+    // Severity level keywords from notes
+    const highSeverityKeywords = ['critical', 'urgent', 'emergency', 'severe', 'serious', 'high priority', 'immediate action'];
+    const mediumSeverityKeywords = ['moderate', 'concern', 'issue', 'problem', 'notable', 'attention needed'];
+    const lowSeverityKeywords = ['minor', 'small', 'trivial', 'low priority', 'negligible'];
+    
+    const notesLower = (notes || '').toLowerCase();
+    
+    // Check for explicit severity keywords in notes first
+    if (highSeverityKeywords.some(kw => notesLower.includes(kw))) {
+        // If notes explicitly mention high severity, escalate
+        if (!lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+    }
+    
+    if (lowSeverityKeywords.some(kw => notesLower.includes(kw))) {
+        // If notes explicitly mention low severity, keep it low unless it's a high-risk category
+        if (!highRiskKeywords.some(kw => notesLower.includes(kw)) && !mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'Low';
+        }
+    }
+    
+    // Severity mapping: High-risk categories get High immediately
+    const highRiskCategories = ['Violence/Aggression', 'Sexual Misconduct', 'Threats'];
+    if (highRiskCategories.includes(category)) {
+        // Check if notes contain high-risk keywords - keep it High
+        if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+        // For high-risk categories, default to High unless notes suggest otherwise
+        return priorReportCount === 0 ? 'Medium' : 'High';
+    }
+    
+    // Medium-risk categories
+    const mediumRiskCategories = ['Vandalism', 'Safety'];
+    if (mediumRiskCategories.includes(category)) {
+        // Check for high-risk keywords in notes
+        if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'High';
+        }
+        // Check for low-risk keywords (downgrade severity)
+        if (lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return 'Low';
+        }
+        // Check for medium-risk keywords
+        if (mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+            return priorReportCount > 0 ? 'High' : 'Medium';
+        }
+        return priorReportCount > 0 ? 'High' : 'Medium';
+    }
+    
+    // Low-risk categories (Disruption, Disrespect, Other)
+    // Check for high-risk keywords in notes first
+    if (highRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return 'High';
+    }
+    
+    // Check for low-risk keywords (keep it low)
+    if (lowRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return priorReportCount === 0 ? 'Low' : (priorReportCount === 1 ? 'Medium' : 'High');
+    }
+    
+    // Check for medium-risk keywords
+    if (mediumRiskKeywords.some(kw => notesLower.includes(kw))) {
+        return priorReportCount >= 1 ? 'High' : 'Medium';
+    }
+    
+    // Escalate based on frequency for low-risk
+    if (priorReportCount === 0) return 'Low';
+    if (priorReportCount === 1) return 'Medium';
+    return 'High';
+}
+
 // Behavior reports: create
 app.post('/api/behavior-reports', requireTeacher, async (req, res) => {
-    const { studentId, sectionId, category, severity, notes, reportDate } = req.body || {};
-    if (!studentId || !sectionId || !category || !severity) {
+    const { studentId, sectionId, category, notes, reportDate } = req.body || {};
+    if (!studentId || !sectionId || !category) {
         return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
     try {
@@ -567,6 +647,17 @@ app.post('/api/behavior-reports', requireTeacher, async (req, res) => {
         if (sec.rows.length === 0) return res.status(403).json({ success: false, error: 'Access denied' });
         const st = await pool.query('SELECT id FROM students WHERE id = $1 AND section_id = $2', [studentId, sectionId]);
         if (st.rows.length === 0) return res.status(400).json({ success: false, error: 'Student not in your section' });
+        
+        // Get prior report count for this student
+        const priorReports = await pool.query(
+            'SELECT COUNT(*) as count FROM student_behavior_reports WHERE student_id = $1',
+            [studentId]
+        );
+        const priorReportCount = parseInt(priorReports.rows[0].count) || 0;
+        
+        // Auto-calculate severity based on category, notes, and history
+        const severity = calculateSeverity(category, notes, priorReportCount);
+        
         const result = await pool.query(`
             INSERT INTO student_behavior_reports (student_id, section_id, teacher_id, report_date, category, severity, notes)
             VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7)
