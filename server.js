@@ -2464,7 +2464,7 @@ app.get('/ictcoorLanding', async (req, res) => {
                 'pending' as enrollment_status
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::integer
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::text
             )
             ORDER BY 
                 CASE 
@@ -4671,7 +4671,7 @@ app.get('/api/students/all', async (req, res) => {
                 false as is_archived
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::integer
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::text
             )
             ORDER BY 
                 CASE 
