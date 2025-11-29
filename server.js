@@ -2450,7 +2450,7 @@ app.get('/ictcoorLanding', async (req, res) => {
         // Also fetch enrollees who haven't been assigned yet (for backward compatibility)
         const enrolleesResult = await pool.query(`
             SELECT 
-                er.id,
+                'ER' || er.id::text as id,
                 er.id as enrollment_id,
                 CONCAT(er.last_name, ', ', er.first_name, ' ', COALESCE(er.middle_name, ''), ' ', COALESCE(er.ext_name, '')) as full_name,
                 er.lrn,
@@ -2464,7 +2464,7 @@ app.get('/ictcoorLanding', async (req, res) => {
                 'pending' as enrollment_status
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::integer
             )
             ORDER BY 
                 CASE 
@@ -4597,7 +4597,7 @@ app.get('/api/students/all', async (req, res) => {
         // Also get enrollees who haven't been assigned yet (pending)
         const enrolleesResult = await pool.query(`
             SELECT 
-                er.id,
+                'ER' || er.id::text as id,
                 er.id as enrollment_id,
                 er.lrn,
                 er.grade_level,
@@ -4615,7 +4615,7 @@ app.get('/api/students/all', async (req, res) => {
                 false as is_archived
             FROM early_registration er
             WHERE NOT EXISTS (
-                SELECT 1 FROM students st WHERE st.enrollment_id = er.id
+                SELECT 1 FROM students st WHERE st.enrollment_id = er.id::integer
             )
             ORDER BY 
                 CASE 
