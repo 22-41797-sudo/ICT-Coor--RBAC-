@@ -2458,7 +2458,7 @@ app.get('/ictcoorLanding', async (req, res) => {
                 er.sex,
                 er.age,
                 er.contact_number,
-                er.assigned_section,
+                NULL as assigned_section,
                 er.school_year,
                 er.created_at as enrollment_date,
                 'pending' as enrollment_status
@@ -4609,7 +4609,7 @@ app.get('/api/students/all', async (req, res) => {
                 er.age,
                 er.sex,
                 er.contact_number,
-                er.assigned_section,
+                NULL as assigned_section,
                 er.created_at as enrollment_date,
                 'pending' as enrollment_status,
                 false as is_archived
