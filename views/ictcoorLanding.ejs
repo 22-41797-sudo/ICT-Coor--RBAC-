@@ -2756,10 +2756,10 @@ q<!DOCTYPE html>
                                 <td style="padding:8px;">${lrn}</td>
                                 <td style="padding:8px;">${sname}</td>
                                 <td style="padding:8px;">
-                                    <button type="button" class="action-btn action-edit" onclick="openReassignModal(${sid}, '${sname}', ${id}, '${escapeHtml(gradeLevel + ' - ' + name)}')" style="margin-right:6px;">
+                                    <button type="button" class="action-btn action-edit" onclick="openReassignModal('${sid}', '${sname}', ${id}, '${escapeHtml(gradeLevel + ' - ' + name)}')" style="margin-right:6px;">
                                         <i class="fas fa-exchange-alt"></i> Reassign
                                     </button>
-                                    <button type="button" class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal(${sid}, '${sname}', ${id})">
+                                    <button type="button" class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal('${sid}', '${sname}', ${id})">
                                         <i class="fas fa-user-minus"></i> Remove
                                     </button>
                                 </td>
@@ -2922,13 +2922,13 @@ q<!DOCTYPE html>
                                     <td>${student.contact_number || '-'}</td>
                                     <td>${enrollmentDate}</td>
                                     <td class="table-actions">
-                                        <button type="button" class="action-btn action-view" title="View details" onclick="openStudentDetails(${student.id})">
+                                        <button type="button" class="action-btn action-view" title="View details" onclick="openStudentDetails('${student.id}')">
                                             <i class="fas fa-eye"></i> View
                                         </button>
-                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId}, '${(gradeLevel + ' - ' + sectionName).replace(/'/g, "\\'")}')">
+                                        <button type="button" class="action-btn action-edit" title="Reassign to another section" onclick="openReassignModal('${student.id}', '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId}, '${(gradeLevel + ' - ' + sectionName).replace(/'/g, "\\'")}')">
                                             <i class="fas fa-exchange-alt"></i> Reassign
                                         </button>
-                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection(${student.id}, '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId})">
+                                        <button type="button" class="action-btn action-delete" title="Remove from section" onclick="removeStudentFromSection('${student.id}', '${(student.full_name||'').replace(/'/g, "\\'")}', ${sectionId})">
                                             <i class="fas fa-user-minus"></i> Remove
                                         </button>
                                     </td>
@@ -3184,29 +3184,29 @@ q<!DOCTYPE html>
 
                 // Actions: View always; if unassigned show Assign; if assigned show Reassign + Remove; if archived show Restore
                 let actions = `
-                    <button class="action-btn action-view" onclick="openStudentDetails(${sid})" title="View details">
+                    <button class="action-btn action-view" onclick="openStudentDetails('${sid}')" title="View details">
                         <i class="fas fa-eye"></i> View
                     </button>`;
 
                 if (!student.is_archived && (!student.assigned_section || student.enrollment_status === 'pending')) {
                     actions += `
-                        <button class="action-btn action-edit" onclick="openAssignSectionModal(${sid}, '${name}', '${assignedSectionName}')" title="Assign to section">
+                        <button class="action-btn action-edit" onclick="openAssignSectionModal('${sid}', '${name}', '${assignedSectionName}')" title="Assign to section">
                             <i class="fas fa-users"></i> Assign
                         </button>`;
                 } else if (!student.is_archived && student.assigned_section) {
                     // Reassign and Remove for assigned students
                     actions += `
-                        <button type="button" class="action-btn action-edit" onclick="openReassignModal(${sid}, '${name}', '', '${assignedSectionName}')" title="Reassign to another section">
+                        <button type="button" class="action-btn action-edit" onclick="openReassignModal('${sid}', '${name}', '', '${assignedSectionName}')" title="Reassign to another section">
                             <i class="fas fa-exchange-alt"></i> Reassign
                         </button>
-                        <button class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal(${sid}, '${name}', '')" title="Remove from section">
+                        <button class="action-btn action-delete" onclick="openConfirmRemoveFromSectionModal('${sid}', '${name}', '')" title="Remove from section">
                             <i class="fas fa-user-minus"></i> Remove
                         </button>`;
                 }
 
                 if (student.is_archived) {
                     actions += `
-                        <button class="action-btn action-edit" onclick="unarchiveStudent(${sid}, '${name}')" title="Restore student">
+                        <button class="action-btn action-edit" onclick="unarchiveStudent('${sid}', '${name}')" title="Restore student">
                             <i class="fas fa-undo"></i> Restore
                         </button>`;
                 }
