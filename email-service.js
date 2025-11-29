@@ -17,7 +17,7 @@ const transporter = nodemailer.createTransport({
 async function sendEnrollmentStatusUpdate(studentEmail, studentName, requestToken, status, rejectionReason = null) {
     try {
         if (!process.env.GMAIL_USER || !process.env.GMAIL_PASSWORD) {
-            console.warn('⚠️ Email service not configured. Skipping email notification.');
+            console.warn('⚠️ Email service not configured. GMAIL_USER:', process.env.GMAIL_USER ? 'SET' : 'NOT SET', 'GMAIL_PASSWORD:', process.env.GMAIL_PASSWORD ? 'SET' : 'NOT SET');
             return false;
         }
 
@@ -81,11 +81,13 @@ async function sendEnrollmentStatusUpdate(studentEmail, studentName, requestToke
             `,
         };
 
+        console.log(`📧 Attempting to send ${status} email to ${studentEmail}...`);
         await transporter.sendMail(mailOptions);
-        console.log(`✅ Enrollment ${status} email sent to ${studentEmail}`);
+        console.log(`✅ Enrollment ${status} email sent successfully to ${studentEmail}`);
         return true;
     } catch (err) {
         console.error('❌ Error sending enrollment email:', err.message);
+        console.error('❌ Full error:', err);
         return false;
     }
 }
@@ -97,7 +99,7 @@ async function sendEnrollmentStatusUpdate(studentEmail, studentName, requestToke
 async function sendDocumentRequestStatusUpdate(studentEmail, studentName, requestToken, documentType, status, rejectionReason = null) {
     try {
         if (!process.env.GMAIL_USER || !process.env.GMAIL_PASSWORD) {
-            console.warn('⚠️ Email service not configured. Skipping email notification.');
+            console.warn('⚠️ Email service not configured. GMAIL_USER:', process.env.GMAIL_USER ? 'SET' : 'NOT SET', 'GMAIL_PASSWORD:', process.env.GMAIL_PASSWORD ? 'SET' : 'NOT SET');
             return false;
         }
 
@@ -166,11 +168,13 @@ async function sendDocumentRequestStatusUpdate(studentEmail, studentName, reques
             `,
         };
 
+        console.log(`📧 Attempting to send document request ${status} email to ${studentEmail}...`);
         await transporter.sendMail(mailOptions);
-        console.log(`✅ Document request ${status} email sent to ${studentEmail}`);
+        console.log(`✅ Document request ${status} email sent successfully to ${studentEmail}`);
         return true;
     } catch (err) {
         console.error('❌ Error sending document request email:', err.message);
+        console.error('❌ Full error:', err);
         return false;
     }
 }

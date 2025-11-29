@@ -1,3 +1,6 @@
+const dotenv = require('dotenv');
+dotenv.config(); // Load environment variables from .env file
+
 const express = require('express');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
@@ -7,8 +10,8 @@ const multer = require('multer');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const dssEngine = require('./dss-engine'); // Import DSS Engine
-const emailService = require('./email-service');
-const PDFDocument = require('pdfkit'); // Import email service for notifications
+const PDFDocument = require('pdfkit'); // Import pdfkit for PDF generation
+const emailService = require('./email-service'); // Import email service for notifications
 
 const app = express();
 const port = 3000;
@@ -1086,11 +1089,8 @@ const pool = new Pool({
     user: process.env.DB_USER || 'postgres',
     host: process.env.DB_HOST || 'localhost',
     database: process.env.DB_NAME || 'ICTCOORdb',
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT || 5432,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    password: process.env.DB_PASSWORD || 'bello0517',
+    port: parseInt(process.env.DB_PORT) || 5432,
 });
 
 // Test database connection
@@ -1146,6 +1146,79 @@ async function ensureTeachersArchiveSchema() {
         console.log('✅ teachers_archive schema ensured');
     } catch (err) {
         console.error('❌ Failed ensuring teachers_archive schema:', err.message);
+        throw err;
+    }
+}
+
+/**
+ * Ensures the enrollment_requests table exists.
+ * Safe to call multiple times.
+ */
+async function ensureEnrollmentRequestsSchema() {
+    const ddl = `
+    CREATE TABLE IF NOT EXISTS enrollment_requests (
+        id SERIAL PRIMARY KEY,
+        request_token VARCHAR(20) UNIQUE NOT NULL,
+        status VARCHAR(20) DEFAULT 'pending',
+        
+        gmail_address VARCHAR(255) NOT NULL,
+        school_year VARCHAR(50) NOT NULL,
+        lrn VARCHAR(50),
+        grade_level VARCHAR(50) NOT NULL,
+        
+        last_name VARCHAR(100) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        middle_name VARCHAR(100),
+        ext_name VARCHAR(50),
+        
+        birthday DATE NOT NULL,
+        age INTEGER NOT NULL,
+        sex VARCHAR(20) NOT NULL,
+        religion VARCHAR(100),
+        current_address TEXT NOT NULL,
+        
+        ip_community VARCHAR(50) NOT NULL,
+        ip_community_specify VARCHAR(100),
+        pwd VARCHAR(50) NOT NULL,
+        pwd_specify VARCHAR(100),
+        
+        father_name VARCHAR(200),
+        mother_name VARCHAR(200),
+        guardian_name VARCHAR(200),
+        contact_number VARCHAR(50),
+        
+        registration_date DATE NOT NULL,
+        printed_name VARCHAR(200) NOT NULL,
+        signature_image_path TEXT,
+        
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        reviewed_by INTEGER REFERENCES registraraccount(id),
+        reviewed_at TIMESTAMP,
+        rejection_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_request_token ON enrollment_requests(request_token);
+    CREATE INDEX IF NOT EXISTS idx_status ON enrollment_requests(status);
+    CREATE OR REPLACE FUNCTION update_enrollment_requests_updated_at()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = CURRENT_TIMESTAMP;
+        RETURN NEW;
+    END;$$ LANGUAGE plpgsql;
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trigger_update_enrollment_requests_updated_at') THEN
+            CREATE TRIGGER trigger_update_enrollment_requests_updated_at
+            BEFORE UPDATE ON enrollment_requests
+            FOR EACH ROW EXECUTE FUNCTION update_enrollment_requests_updated_at();
+        END IF;
+    END$$;
+    `;
+    try {
+        await pool.query(ddl);
+        console.log('✅ enrollment_requests schema ensured');
+    } catch (err) {
+        console.error('❌ Failed ensuring enrollment_requests schema:', err.message);
         throw err;
     }
 }
@@ -2454,31 +2527,6 @@ app.post('/submit-enrollment', enrollmentLimiter, upload.single('signatureImage'
             gmail, lrn, gradeLevel, lastName, givenName 
         });
         
-        // Send submission confirmation email
-        try {
-            await emailService.sendEnrollmentStatusUpdate(
-                gmail,
-                givenName + ' ' + lastName,
-                token,
-                'pending'
-            );
-        } catch (emailErr) {
-            console.error('Error sending enrollment submission confirmation email:', emailErr);
-            // Don't fail the submission if email fails
-        }
-        
-        // Send submission confirmation email
-        try {
-            await emailService.sendEnrollmentStatusUpdate(
-                gmail,
-                givenName + ' ' + lastName,
-                token,
-                'pending'
-            );
-        } catch (emailErr) {
-            console.error('Error sending enrollment submission confirmation email:', emailErr);
-        }
-        
         // Return success with token
         res.json({ 
             success: true, 
@@ -2488,11 +2536,284 @@ app.post('/submit-enrollment', enrollmentLimiter, upload.single('signatureImage'
 
     } catch (err) {
         console.error('Error submitting enrollment:', err);
+        
+        // Auto-create schema if missing
+        if (err.message && /relation "enrollment_requests" does not exist/i.test(err.message)) {
+            console.warn('⚠️ enrollment_requests table missing – creating now...');
+            try {
+                await ensureEnrollmentRequestsSchema();
+                
+                // Retry the submission
+                let requestToken;
+                let tokenExists = true;
+                while (tokenExists) {
+                    requestToken = generateToken();
+                    const check = await pool.query('SELECT id FROM enrollment_requests WHERE request_token = $1', [requestToken]);
+                    tokenExists = check.rows.length > 0;
+                }
+
+                const insertQuery = `
+                    INSERT INTO enrollment_requests (
+                        request_token, gmail_address, school_year, lrn, grade_level,
+                        last_name, first_name, middle_name, ext_name,
+                        birthday, age, sex, religion, current_address,
+                        ip_community, ip_community_specify, pwd, pwd_specify,
+                        father_name, mother_name, guardian_name, contact_number,
+                        registration_date, printed_name, signature_image_path
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+                    RETURNING id, request_token
+                `;
+
+                const values = [
+                    requestToken, 
+                    gmail.toLowerCase().trim(), 
+                    sanitizeText(schoolYear), 
+                    lrn || null, 
+                    sanitizeText(gradeLevel),
+                    sanitizeText(lastName), 
+                    sanitizeText(givenName), 
+                    sanitizeText(middleName) || null, 
+                    sanitizeText(extName) || null,
+                    birthday, 
+                    parseInt(age), 
+                    sex, 
+                    sanitizeText(religion) || null, 
+                    sanitizeText(currentAddress) || 'N/A',
+                    ipCommunityFinal, 
+                    sanitizeText(ipCommunitySpecifyFinal), 
+                    pwdFinal, 
+                    sanitizeText(pwdSpecifyFinal),
+                    sanitizeText(fatherNameFinal) || null, 
+                    sanitizeText(motherNameFinal) || null, 
+                    sanitizeText(guardianNameFinal) || null,
+                    contactNumber || null, 
+                    registrationDate, 
+                    sanitizeText(printedName), 
+                    signatureImagePath
+                ];
+
+                const result = await pool.query(insertQuery, values);
+                const token = result.rows[0].request_token;
+                
+                await logSubmission('enrollment', req, 'success', null, token, { 
+                    gmail, lrn, gradeLevel, lastName, givenName 
+                });
+                
+                return res.json({ 
+                    success: true, 
+                    message: 'Enrollment request submitted successfully!',
+                    token: token
+                });
+            } catch (inner) {
+                console.error('❌ Failed after creating schema:', inner.message);
+                await logSubmission('enrollment', req, 'error', inner.message, null, { gmail, lrn });
+                return res.status(500).json({ success: false, message: 'Error after schema creation: ' + inner.message });
+            }
+        }
+        
         await logSubmission('enrollment', req, 'error', err.message, null, { gmail, lrn });
         res.status(500).json({ 
             success: false, 
             message: 'Error submitting enrollment: ' + err.message 
         });
+    }
+});
+
+// Download enrollment form as text/JSON/PDF file
+app.get('/download-enrollment/:token', async (req, res) => {
+    const token = req.params.token;
+    const format = req.query.format || 'pdf'; // 'txt', 'json', or 'pdf'
+
+    try {
+        const result = await pool.query(`
+            SELECT * FROM enrollment_requests WHERE request_token = $1
+        `, [token]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Enrollment request not found' });
+        }
+
+        const data = result.rows[0];
+        const filename = `enrollment-${token}`;
+
+        if (format === 'json') {
+            // Download as JSON
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+            res.json(data);
+        } else if (format === 'pdf') {
+            // Generate PDF
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+
+            const doc = new PDFDocument({ margin: 50 });
+            doc.pipe(res);
+
+            // Helper function to format date without time
+            const formatDateOnly = (dateString) => {
+                if (!dateString) return 'N/A';
+                const date = new Date(dateString);
+                return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+            };
+
+            // Title
+            doc.fontSize(20).font('Helvetica-Bold').text('ENROLLMENT FORM', { align: 'center' });
+            doc.fontSize(10).font('Helvetica').text('Copy/Download Record', { align: 'center' });
+            doc.moveDown();
+
+            // Metadata
+            doc.fontSize(9).text(`Generated: ${formatDateOnly(new Date().toISOString())}`, { align: 'right' });
+            doc.text(`Request Token: ${data.request_token}`, { align: 'right' });
+            doc.text(`Status: ${data.status || 'Pending'}`, { align: 'right' });
+            doc.moveDown();
+
+            // Personal Information Section
+            doc.fontSize(12).font('Helvetica-Bold').text('PERSONAL INFORMATION');
+            doc.fontSize(9).font('Helvetica');
+            doc.text(`Email: ${data.gmail_address}`);
+            doc.text(`Name: ${data.last_name}, ${data.first_name} ${data.middle_name || ''} ${data.ext_name || ''}`.trim());
+            doc.text(`Birthdate: ${data.birthday}`);
+            doc.text(`Age: ${data.age}`);
+            doc.text(`Sex: ${data.sex}`);
+            doc.text(`Religion: ${data.religion || 'N/A'}`);
+            doc.text(`LRN: ${data.lrn || 'N/A'}`);
+            doc.moveDown();
+
+            // Enrollment Details Section
+            doc.fontSize(12).font('Helvetica-Bold').text('ENROLLMENT DETAILS');
+            doc.fontSize(9).font('Helvetica');
+            doc.text(`School Year: ${data.school_year}`);
+            doc.text(`Grade Level: ${data.grade_level}`);
+            doc.text(`Current Address: ${data.current_address || 'N/A'}`);
+            doc.text(`Contact Number: ${data.contact_number || 'N/A'}`);
+            doc.moveDown();
+
+            // Special Information Section
+            doc.fontSize(12).font('Helvetica-Bold').text('SPECIAL INFORMATION');
+            doc.fontSize(9).font('Helvetica');
+            doc.text(`IP Community: ${data.ip_community}`);
+            if (data.ip_community_specify) {
+                doc.text(`IP Community Specify: ${data.ip_community_specify}`);
+            }
+            doc.text(`PWD: ${data.pwd}`);
+            if (data.pwd_specify) {
+                doc.text(`PWD Specify: ${data.pwd_specify}`);
+            }
+            doc.moveDown();
+
+            // Parent/Guardian Information Section
+            doc.fontSize(12).font('Helvetica-Bold').text('PARENT/GUARDIAN INFORMATION');
+            doc.fontSize(9).font('Helvetica');
+            doc.text(`Father: ${data.father_name || 'N/A'}`);
+            doc.text(`Mother: ${data.mother_name || 'N/A'}`);
+            doc.text(`Guardian: ${data.guardian_name || 'N/A'}`);
+            doc.moveDown();
+
+            // Submission Details Section
+            doc.fontSize(12).font('Helvetica-Bold').text('SUBMISSION DETAILS');
+            doc.fontSize(9).font('Helvetica');
+            doc.text(`Submitted: ${formatDateOnly(data.created_at)}`);
+            doc.text(`Printed Name: ${data.printed_name || 'N/A'}`);
+            doc.text(`Signature: ${data.signature_image_path ? 'Provided' : 'Not provided'}`);
+
+            // Add footer
+            doc.fontSize(8).text('---', { align: 'center' });
+            doc.text('This is an official copy of the enrollment form', { align: 'center' });
+
+            doc.end();
+        } else {
+            // Download as text file
+            let content = `ENROLLMENT FORM - COPY/DOWNLOAD\n`;
+            content += `===============================================\n`;
+            content += `Generated: ${new Date().toLocaleString()}\n`;
+            content += `Request Token: ${data.request_token}\n`;
+            content += `Status: ${data.status || 'Pending'}\n\n`;
+            
+            content += `PERSONAL INFORMATION\n`;
+            content += `-------------------\n`;
+            content += `Gmail: ${data.gmail_address}\n`;
+            content += `Name: ${data.last_name}, ${data.first_name} ${data.middle_name || ''} ${data.ext_name || ''}\n`;
+            content += `Birthdate: ${data.birthday}\n`;
+            content += `Age: ${data.age}\n`;
+            content += `Sex: ${data.sex}\n`;
+            content += `Religion: ${data.religion || 'N/A'}\n`;
+            content += `LRN: ${data.lrn || 'N/A'}\n\n`;
+
+            content += `ENROLLMENT DETAILS\n`;
+            content += `------------------\n`;
+            content += `School Year: ${data.school_year}\n`;
+            content += `Grade Level: ${data.grade_level}\n`;
+            content += `Current Address: ${data.current_address || 'N/A'}\n`;
+            content += `Contact Number: ${data.contact_number || 'N/A'}\n\n`;
+
+            content += `SPECIAL INFORMATION\n`;
+            content += `-------------------\n`;
+            content += `IP Community: ${data.ip_community}\n`;
+            if (data.ip_community_specify) {
+                content += `IP Community Specify: ${data.ip_community_specify}\n`;
+            }
+            content += `PWD: ${data.pwd}\n`;
+            if (data.pwd_specify) {
+                content += `PWD Specify: ${data.pwd_specify}\n`;
+            }
+            content += `\n`;
+
+            content += `PARENT/GUARDIAN INFORMATION\n`;
+            content += `---------------------------\n`;
+            content += `Father: ${data.father_name || 'N/A'}\n`;
+            content += `Mother: ${data.mother_name || 'N/A'}\n`;
+            content += `Guardian: ${data.guardian_name || 'N/A'}\n\n`;
+
+            content += `SUBMISSION DETAILS\n`;
+            content += `------------------\n`;
+            content += `Submitted: ${data.created_at}\n`;
+            content += `Printed Name: ${data.printed_name || 'N/A'}\n`;
+            content += `Signature: ${data.signature_image_path ? 'Provided' : 'Not provided'}\n`;
+
+            res.setHeader('Content-Type', 'text/plain');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}.txt"`);
+            res.send(content);
+        }
+    } catch (err) {
+        console.error('Error downloading enrollment:', err);
+        res.status(500).json({ error: 'Error generating download' });
+    }
+});
+
+// Get enrollment data for display (for copy to clipboard)
+app.get('/api/enrollment/:token', async (req, res) => {
+    const token = req.params.token;
+
+    try {
+        const result = await pool.query(`
+            SELECT * FROM enrollment_requests WHERE request_token = $1
+        `, [token]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Enrollment request not found' });
+        }
+
+        const data = result.rows[0];
+        const formattedData = {
+            requestToken: data.request_token,
+            status: data.status || 'Pending',
+            submissionDate: data.created_at,
+            learnerName: `${data.last_name}, ${data.first_name} ${data.middle_name || ''} ${data.ext_name || ''}`.trim(),
+            gmail: data.gmail_address,
+            schoolYear: data.school_year,
+            gradeLevel: data.grade_level,
+            birthdate: data.birthday,
+            age: data.age,
+            sex: data.sex,
+            lrn: data.lrn || 'N/A',
+            address: data.current_address || 'N/A',
+            contactNumber: data.contact_number || 'N/A'
+        };
+
+        res.json(formattedData);
+    } catch (err) {
+        console.error('Error fetching enrollment:', err);
+        res.status(500).json({ error: 'Error fetching enrollment data' });
     }
 });
 
@@ -2603,21 +2924,11 @@ app.post('/approve-request/:id', async (req, res) => {
             [registrarId, requestId]
         );
 
+        // Send approval notification email
+        const learnerName = `${request.first_name} ${request.last_name}`;
+        await emailService.sendEnrollmentStatusUpdate(request.gmail_address, learnerName, request.request_token, 'approved');
+
         await client.query('COMMIT');
-        
-        // Send approval email notification
-        try {
-            await emailService.sendEnrollmentStatusUpdate(
-                request.gmail_address,
-                request.first_name + ' ' + request.last_name,
-                request.request_token,
-                'approved'
-            );
-        } catch (emailErr) {
-            console.error('Error sending approval email:', emailErr);
-            // Don't fail the approval if email fails
-        }
-        
         res.json({ success: true, message: 'Request approved successfully', early_registration_id: inserted.rows[0].id });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -2639,11 +2950,28 @@ app.post('/reject-request/:id', async (req, res) => {
     const { reason } = req.body;
 
     try {
+        // Get request details before updating (for email notification)
+        const requestResult = await pool.query(`
+            SELECT first_name, last_name, gmail_address, request_token 
+            FROM enrollment_requests 
+            WHERE id = $1
+        `, [requestId]);
+        
+        if (requestResult.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Request not found' });
+        }
+        
+        const enrollmentRequest = requestResult.rows[0];
+        
         await pool.query(`
             UPDATE enrollment_requests 
             SET status = 'rejected', reviewed_by = $1, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = $2
             WHERE id = $3
         `, [registrarId, reason || 'No reason provided', requestId]);
+
+        // Send rejection notification email
+        const learnerName = `${enrollmentRequest.first_name} ${enrollmentRequest.last_name}`;
+        await emailService.sendEnrollmentStatusUpdate(enrollmentRequest.gmail_address, learnerName, enrollmentRequest.request_token, 'rejected', reason || 'No reason provided');
 
         res.json({ success: true, message: 'Request rejected' });
     } catch (err) {
@@ -2704,22 +3032,7 @@ app.post('/api/document-request/submit', documentRequestLimiter, async (req, res
         await logSubmission('document_request', req, 'success', null, token, { 
             email, studentName, documentType 
         });
-                // Send submission confirmation email
-                try {
-                    await emailService.sendDocumentRequestStatusUpdate(
-                        email,
-                        studentName,
-                        token,
-                        documentType,
-                        'pending',
-                        null
-                    );
-                } catch (emailErr) {
-                    console.error('Error sending document submission confirmation email:', emailErr);
-                    // Don't fail the submission if email fails
-                }
-        
-                return res.json({ success: true, message: 'Document request submitted successfully!', token });
+        return res.json({ success: true, message: 'Document request submitted successfully!', token });
     } catch (err) {
         // Auto-create schema if missing
         if (err.message && /relation "document_requests" does not exist/i.test(err.message)) {
@@ -2857,6 +3170,19 @@ app.put('/api/guidance/document-requests/:id/status', async (req, res) => {
     }
 
     try {
+        // Get request details before updating (for email notification)
+        const getQuery = `SELECT * FROM document_requests WHERE id = $1`;
+        const getResult = await pool.query(getQuery, [requestId]);
+        
+        if (getResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Request not found'
+            });
+        }
+        
+        const documentRequest = getResult.rows[0];
+        
         const updateQuery = `
             UPDATE document_requests
             SET status = $1,
@@ -2877,28 +3203,16 @@ app.put('/api/guidance/document-requests/:id/status', async (req, res) => {
             requestId
         ]);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Request not found'
-            });
-        }
-        
-        const updatedRequest = result.rows[0];
-        
-        // Send status update email notification
-        try {
+        // Send email notification for status updates that warrant notification
+        if (status === 'processing' || status === 'ready' || status === 'rejected') {
             await emailService.sendDocumentRequestStatusUpdate(
-                updatedRequest.email,
-                updatedRequest.student_name,
-                updatedRequest.request_token,
-                updatedRequest.document_type,
-                updatedRequest.status,
-                updatedRequest.rejection_reason || null
+                documentRequest.email,
+                documentRequest.student_name,
+                documentRequest.request_token,
+                documentRequest.document_type,
+                status,
+                rejection_reason || null
             );
-        } catch (emailErr) {
-            console.error('Error sending document status email:', emailErr);
-            // Don't fail the status update if email fails
         }
 
         res.json({
@@ -4779,7 +5093,17 @@ app.put('/api/teachers/:teacherId/assign-section', async (req, res) => {
         res.render('guidance/guidanceAnalytics', { user: req.session.user });
     });
 
-
+// Initialize database schemas on startup
+async function initializeSchemas() {
+    try {
+        await ensureEnrollmentRequestsSchema();
+        await ensureDocumentRequestsSchema();
+        await ensureSubmissionLogsSchema();
+        await ensureBlockedIPsSchema();
+    } catch (err) {
+        console.error('Error initializing schemas:', err.message);
+    }
+}
 
 // Dashboard summary and charts data
 app.get('/api/dashboard/summary', async (req, res) => {
@@ -5643,102 +5967,41 @@ app.get('/api/stats/barangay-distribution', async (req, res) => {
     }
 });
 
-
-// Download enrollment form as PDF
-app.get('/download-enrollment/:token', async (req, res) => {
-    const token = req.params.token;
-    const format = req.query.format || 'pdf';
+// ===== TEST EMAIL ENDPOINT =====
+app.post('/api/test-email', async (req, res) => {
+    const { email, type } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ success: false, error: 'Email required' });
+    }
 
     try {
-        const result = await pool.query(`
-            SELECT * FROM enrollment_requests WHERE request_token = $1
-        `, [token]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Enrollment request not found' });
-        }
-
-        if (format === 'pdf') {
-            const data = result.rows[0];
-            const filename = `enrollment-${token}`;
-            
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
-
-            const doc = new PDFDocument({ margin: 50 });
-            doc.pipe(res);
-
-            doc.fontSize(20).font('Helvetica-Bold').text('ENROLLMENT FORM', { align: 'center' });
-            doc.fontSize(10).font('Helvetica').text('Copy/Download Record', { align: 'center' });
-            doc.moveDown();
-
-            doc.fontSize(9).text(`Generated: ${new Date().toLocaleString()}`, { align: 'right' });
-            doc.text(`Request Token: ${data.request_token}`, { align: 'right' });
-            doc.text(`Status: ${data.status || 'Pending'}`, { align: 'right' });
-            doc.moveDown();
-
-            doc.fontSize(12).font('Helvetica-Bold').text('PERSONAL INFORMATION');
-            doc.fontSize(9).font('Helvetica');
-            doc.text(`Gmail: ${data.gmail_address}`);
-            doc.text(`Name: ${data.last_name}, ${data.first_name} ${data.middle_name || ''} ${data.ext_name || ''}`.trim());
-            doc.text(`Birthdate: ${data.birthday}`);
-            doc.text(`Age: ${data.age}`);
-            doc.text(`Sex: ${data.sex}`);
-            doc.text(`Religion: ${data.religion || 'N/A'}`);
-            doc.text(`LRN: ${data.lrn || 'N/A'}`);
-            doc.moveDown();
-
-            doc.fontSize(12).font('Helvetica-Bold').text('ENROLLMENT DETAILS');
-            doc.fontSize(9).font('Helvetica');
-            doc.text(`School Year: ${data.school_year}`);
-            doc.text(`Grade Level: ${data.grade_level}`);
-            doc.text(`Current Address: ${data.current_address || 'N/A'}`);
-            doc.text(`Contact Number: ${data.contact_number || 'N/A'}`);
-            doc.moveDown();
-
-            doc.fontSize(12).font('Helvetica-Bold').text('SPECIAL INFORMATION');
-            doc.fontSize(9).font('Helvetica');
-            doc.text(`IP Community: ${data.ip_community}`);
-            if (data.ip_community_specify) {
-                doc.text(`IP Community Specify: ${data.ip_community_specify}`);
-            }
-            doc.text(`PWD: ${data.pwd}`);
-            if (data.pwd_specify) {
-                doc.text(`PWD Specify: ${data.pwd_specify}`);
-            }
-            doc.moveDown();
-
-            doc.fontSize(12).font('Helvetica-Bold').text('PARENT/GUARDIAN INFORMATION');
-            doc.fontSize(9).font('Helvetica');
-            doc.text(`Father: ${data.father_name || 'N/A'}`);
-            doc.text(`Mother: ${data.mother_name || 'N/A'}`);
-            doc.text(`Guardian: ${data.guardian_name || 'N/A'}`);
-            doc.moveDown();
-
-            doc.fontSize(12).font('Helvetica-Bold').text('SUBMISSION DETAILS');
-            doc.fontSize(9).font('Helvetica');
-            doc.text(`Submitted: ${data.created_at}`);
-            doc.text(`Printed Name: ${data.printed_name || 'N/A'}`);
-            doc.text(`Signature: ${data.signature_image_path ? 'Provided' : 'Not provided'}`);
-
-            doc.fontSize(8).text('---', { align: 'center' });
-            doc.text('This is an official copy of the enrollment form', { align: 'center' });
-
-            doc.end();
+        let result;
+        
+        if (type === 'enrollment-approved') {
+            result = await emailService.sendEnrollmentStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'approved');
+        } else if (type === 'enrollment-rejected') {
+            result = await emailService.sendEnrollmentStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'rejected', 'Test rejection reason');
+        } else if (type === 'document-processing') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'processing');
+        } else if (type === 'document-ready') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'ready');
+        } else if (type === 'document-rejected') {
+            result = await emailService.sendDocumentRequestStatusUpdate(email, 'Test Student', 'TEST-TOKEN-123', 'Transcript', 'rejected', 'Test rejection reason');
         } else {
-            res.status(404).json({ error: 'Format not supported' });
+            return res.status(400).json({ success: false, error: 'Invalid type' });
         }
+
+        res.json({ success: result, message: result ? 'Test email sent successfully' : 'Failed to send test email' });
     } catch (err) {
-        console.error('Error downloading enrollment:', err);
-        res.status(500).json({ error: 'Error generating download: ' + err.message });
+        console.error('Error sending test email:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
 // Start the server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    
+    // Initialize schemas after server starts
+    initializeSchemas();
 });
-
-
-
